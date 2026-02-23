@@ -130,6 +130,44 @@ The two guarantees that make this work:
 1. **`matchId` partition key** → all balls of a match go to the same partition, consumed by one thread
 2. **`AckMode.RECORD` + `enable-auto-commit: false`** → thread does not move to Ball N+1 until Ball N is fully written to DynamoDB and offset committed
 
+### Why Not 1 Partition + 1 Consumer?
+
+One partition with one consumer **does guarantee ordering** — it's the simplest correct design. The problem is **throughput and horizontal scaling**.
+
+#### ❌ Problem 1 — All Matches Queue Serially
+
+With 8 simultaneous IPL matches and a single partition:
+
+```
+[MI Ball 1] → write 50ms → [CSK Ball 1] → write 50ms → [RCB Ball 1] → write 50ms → ...
+```
+
+All 8 matches block behind each other on one thread. A slow DynamoDB write for one match delays score updates for **all other matches**. Viewers watching RCB vs KKR wait because the MI vs CSK thread is busy.
+
+#### ❌ Problem 2 — Consumer Cannot Scale Out
+
+In Kafka, **you can have at most as many active consumers in a group as there are partitions**. With 1 partition:
+
+```
+Consumer Task 1 → assigned Partition 0  (active, doing all the work)
+Consumer Task 2 → NO partition available → sits completely IDLE
+Consumer Task 3 → NO partition available → sits completely IDLE
+```
+
+Adding more ECS tasks does nothing. You can never scale horizontally beyond one thread.
+
+#### Comparison
+
+| | 1 Partition, 1 Consumer | 192 Partitions, 192 Threads |
+|---|---|---|
+| **Ordering guarantee** | ✅ Guaranteed | ✅ Guaranteed per match |
+| **8 simultaneous matches** | ❌ All queue serially on one thread | ✅ All processed in parallel |
+| **Scale out (add ECS tasks)** | ❌ Impossible — extra consumers sit idle | ✅ Add tasks → more throughput |
+| **One slow match affects others** | ❌ Stalls the entire queue | ✅ Each match is fully isolated |
+| **Throughput ceiling** | ❌ ~1 DynamoDB write at a time | ✅ 192 DynamoDB writes simultaneously |
+
+> With 192 partitions, each match gets its own partition and its own thread. Ordering is still guaranteed **per match**, but all matches run fully in parallel — the best of both worlds.
+
 ### Partition Count Rationale
 
 ```
@@ -142,6 +180,7 @@ The two guarantees that make this work:
 - **Rebalance cost is low** — `CooperativeStickyAssignor` used in prod to avoid stop-the-world rebalances on rolling deploys
 
 ---
+
 
 ## Key Design Decisions
 
