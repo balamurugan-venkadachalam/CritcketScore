@@ -1,0 +1,195 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# T20 Live Scoring – Local Development Stack
+#
+# Stack layout:
+#   broker          – Confluent Kafka (KRaft, single broker, port 9092)
+#   schema-registry – Confluent Schema Registry (port 8081)
+#   control-center  – Confluent Control Center UI (port 9021)
+#   localstack      – AWS LocalStack Community (port 4566)
+#                     Services: dynamodb, s3, sns, secretsmanager
+#
+# Usage:
+#   make up       – start all services
+#   make down     – stop and remove containers
+#   make reset    – remove containers + volumes (clean slate)
+#   make logs     – tail all service logs
+#   make topics   – list Kafka topics via CLI
+#
+# Prerequisites: Docker Desktop ≥ 4.x, ≥ 6 GB RAM allocated to Docker.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  broker-data:
+  localstack-data:
+  control-center-data:
+
+# ── Shared network ────────────────────────────────────────────────────────────
+networks:
+  t20-local:
+    driver: bridge
+
+services:
+
+  # ── Kafka Broker (Confluent Platform, KRaft mode) ───────────────────────────
+  #
+  # KRaft eliminates the need for a separate Zookeeper container.
+  # We expose two listener endpoints:
+  #   PLAINTEXT://broker:29092  — internal container-to-container (used by Schema Registry, Control Center)
+  #   PLAINTEXT://localhost:9092 — host machine access (Spring Boot apps running via ./gradlew bootRun)
+  #
+  broker:
+    image: confluentinc/cp-kafka:7.7.1
+    hostname: broker
+    container_name: t20-kafka-broker
+    networks:
+      - t20-local
+    ports:
+      - "9092:9092"       # host access (Spring Boot apps)
+      - "9101:9101"       # JMX (optional, for monitoring)
+    volumes:
+      - broker-data:/var/lib/kafka/data
+    environment:
+      # ── KRaft (no Zookeeper) ──────────────────────────────────────────────
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@broker:29093"
+
+      # ── Listeners ─────────────────────────────────────────────────────────
+      # INTERNAL: used by containers on the docker network
+      # EXTERNAL: used by the host machine (Spring Boot)
+      # CONTROLLER: used for KRaft leader election (not client-facing)
+      KAFKA_LISTENERS: "INTERNAL://broker:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://broker:29093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://broker:29092,EXTERNAL://localhost:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+      # ── Defaults ──────────────────────────────────────────────────────────
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"    # Spring creates topics on startup in local profile
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+
+      # ── Cluster ID (deterministic for local — regenerate if you get "already initialised" errors)
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+      # ── JMX (optional) ────────────────────────────────────────────────────
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Confluent Schema Registry ────────────────────────────────────────────────
+  #
+  # Not required by the current producer (which uses plain JSON + StringSerializer),
+  # but included as part of Confluent lite for future Avro/Protobuf migration.
+  # Exposes REST API on port 8081.
+  #
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.7.1
+    hostname: schema-registry
+    container_name: t20-schema-registry
+    networks:
+      - t20-local
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "broker:29092"
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+    depends_on:
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # ── Confluent Control Center (Kafka UI) ──────────────────────────────────────
+  #
+  # Web UI at http://localhost:9021 — browse topics, consumer group lag,
+  # message viewer, schema registry, and connector management.
+  # This is a resource-heavy service; comment it out if RAM is constrained.
+  #
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.7.1
+    hostname: control-center
+    container_name: t20-control-center
+    networks:
+      - t20-local
+    ports:
+      - "9021:9021"
+    volumes:
+      - control-center-data:/var/lib/confluent-control-center
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "broker:29092"
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9021/2.0/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── LocalStack Community (AWS services) ──────────────────────────────────────
+  #
+  # Emulates: DynamoDB, S3, SNS, Secrets Manager
+  # All services accessible at http://localhost:4566
+  #
+  # Init scripts in ./localstack/init/ are executed alphabetically on first startup:
+  #   01-dynamodb.sh  – create DynamoDB tables
+  #   02-s3.sh        – create S3 buckets
+  #   03-sns.sh       – create SNS topics
+  #   04-secrets.sh   – create Secrets Manager secrets
+  #
+  localstack:
+    image: localstack/localstack:3.8
+    hostname: localstack
+    container_name: t20-localstack
+    networks:
+      - t20-local
+    ports:
+      - "4566:4566"         # All AWS service endpoints (unified gateway)
+      - "4510-4530:4510-4530"  # Range for legacy compatibility (optional)
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - ./localstack/init:/etc/localstack/init/ready.d   # Init scripts (run on ready)
+      - /var/run/docker.sock:/var/run/docker.sock         # Required for LocalStack Pro features (harmless for Community)
+    environment:
+      SERVICES: "dynamodb,s3,sns,secretsmanager"
+      DEFAULT_REGION: "ap-southeast-2"
+      AWS_DEFAULT_REGION: "ap-southeast-2"
+      # Persistence: keep state between container restarts (remove if you want ephemeral)
+      PERSISTENCE: 1
+      # Disable AWS request validation for easier local dev
+      DISABLE_CORS_CHECKS: 1
+      DISABLE_CUSTOM_CORS_S3: 1
+      # Logging
+      DEBUG: 0
+      LS_LOG: warn
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s

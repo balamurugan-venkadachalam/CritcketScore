@@ -14,7 +14,7 @@
 
 | Task ID | Title | Status | Priority | Dependencies |
 |---------|-------|--------|----------|--------------|
-| TASK-00 | Local Development Environment (LocalStack + Kafka) | 🔲 | P0 | None |
+| TASK-00 | Local Development Environment (LocalStack + Kafka) | ✅ | P0 | None |
 | TASK-01 | Project Scaffold & Parent Structure | ✅ | P0 | None |
 | TASK-02 | AWS CDK Infrastructure – Foundation | 🔲 | P0 | TASK-01 |
 | TASK-03 | AWS CDK Infrastructure – Compute & Messaging | 🔲 | P0 | TASK-02 |
@@ -35,40 +35,34 @@
 ---
 
 ## TASK-00: Local Development Environment (LocalStack + Kafka)
-**Status:** 🔲 Pending  
+**Status:** ✅ Done  
 **Priority:** P0 – Needed for local testing of all application tasks  
 **Estimated Effort:** Medium  
-**Description:** Set up a fully self-contained local development environment using Docker Compose so developers can run and test the producer/consumer without AWS access. Covers a local Kafka broker (Redpanda or multi-broker Kafka), LocalStack (DynamoDB, S3, SNS, Secrets Manager), and a lightweight Kafka UI for visibility.
+**Description:** Set up a fully self-contained local development environment using Docker Compose so developers can run and test the producer/consumer without AWS access. Covers a local Kafka broker (Confluent Platform KRaft, single broker), LocalStack Community (DynamoDB, S3, SNS, Secrets Manager), and Confluent Control Center UI.
 
-> **Decision Required:** Choose the Kafka flavour and LocalStack vs. individual service containers. Options are detailed in each subtask. Pick after reviewing the options below.
+> **Decisions made:** Confluent Platform lite (KRaft), LocalStack Community, single broker, health-check-based `depends_on`.
 
 ### Subtasks
 
 | Sub ID | Description | Status | Options / Notes |
 |--------|-------------|--------|-----------------|
-| TASK-00.1 | Choose & configure local Kafka | 🔲 | **Option A:** Redpanda (single container, Kafka-compatible, built-in admin UI at port 8080). **Option B:** Apache Kafka KRaft (kafka-native, no Zookeeper, official `apache/kafka` image ≥ 3.7). **Option C:** Confluent Platform lite (heavier, adds Schema Registry). |
-| TASK-00.2 | Choose & configure local AWS services | 🔲 | **Option A:** LocalStack Community (DynamoDB, S3, SNS, Secrets Manager — all v2 SDK compatible, free tier). **Option B:** Individual AWS images: `amazon/dynamodb-local` + mock-SNS + mock-Secrets Manager (lighter, but no unified health check). |
-| TASK-00.3 | `docker-compose.yml` – Kafka broker(s) | 🔲 | Single broker for speed vs. 3-broker cluster for fidelity. Topics auto-created via env vars or init script. |
-| TASK-00.4 | `docker-compose.yml` – LocalStack service | 🔲 | Mount `./localstack/init/` for startup scripts: create DynamoDB tables (`t20-score-events`, `t20-live-scores`), S3 buckets, SNS topics, Secrets Manager secrets. |
-| TASK-00.5 | `docker-compose.yml` – Kafka UI (optional) | 🔲 | **Option A:** Redpanda Console (built-in when using Redpanda). **Option B:** `provectuslabs/kafka-ui` (works with any Kafka). Exposes topic browse, consumer-group lag, message viewer. |
-| TASK-00.6 | `localstack/init/01-dynamodb.sh` – Table init script | 🔲 | `aws dynamodb create-table` for `t20-score-events` (PK: matchId, SK: eventSequence) and `t20-live-scores` (PK: matchId) with PAY_PER_REQUEST billing. |
-| TASK-00.7 | `localstack/init/02-secrets.sh` – Secrets Manager init | 🔲 | Create placeholder secrets matching prod secret names so the app can start on local with Secrets Manager enabled. |
-| TASK-00.8 | `application-local.yml` updates | 🔲 | Point Kafka bootstrap to `localhost:9092` (or container port), DynamoDB endpoint to `http://localhost:4566`, Secrets Manager endpoint to `http://localhost:4566`. |
-| TASK-00.9 | Developer quickstart `Makefile` | 🔲 | Targets: `make up` (docker compose up), `make down`, `make logs`, `make topics` (list topics via CLI), `make reset` (tear down + remove volumes). |
-| TASK-00.10 | Verify & document in `docs/local-setup.md` | 🔲 | Step-by-step guide: prerequisites (Docker, Java 24, AWS CLI), `make up`, run producer (`./gradlew bootRun --args='--spring.profiles.active=local'`), send a test event, verify in Kafka UI and DynamoDB. |
+| TASK-00.1 | Choose & configure local Kafka | ✅ | Confluent Platform 7.7.1 (KRaft, single broker) — `confluentinc/cp-kafka:7.7.1` |
+| TASK-00.2 | Choose & configure local AWS services | ✅ | LocalStack Community 3.8 — DynamoDB, S3, SNS, Secrets Manager |
+| TASK-00.3 | `docker-compose.yml` – Kafka broker(s) | ✅ | Single broker, KRaft mode, dual listeners (internal + external), health check |
+| TASK-00.4 | `docker-compose.yml` – LocalStack service | ✅ | `localstack/localstack:3.8`, init scripts mounted to `ready.d`, persistence enabled |
+| TASK-00.5 | `docker-compose.yml` – Kafka UI | ✅ | Confluent Control Center 7.7.1 on port 9021; Schema Registry on port 8081 |
+| TASK-00.6 | `localstack/init/01-dynamodb.sh` – Table init script | ✅ | Creates `t20-score-events` (PK+SK+GSI), `t20-live-scores`, `t20-replay-state` |
+| TASK-00.7 | `localstack/init/02-secrets.sh` – Secrets Manager init | ✅ | Creates `t20/producer/config` and `t20/consumer/config` secrets |
+| TASK-00.8 | `application-local.yml` updates | ✅ | Kafka → localhost:9092; LocalStack endpoint override for Secrets Manager |
+| TASK-00.9 | Developer quickstart `Makefile` | ✅ | 18 targets: `up`, `up-minimal`, `down`, `reset`, `logs`, `health`, `topics`, `kafka-produce`, `kafka-consume`, `dynamo-list`, `dynamo-scan-*`, `secrets`, `producer` |
+| TASK-00.10 | Verify & document in `docs/local-setup.md` | ✅ | Full guide: prerequisites, quick start, step-by-step, Makefile reference, configuration tables, troubleshooting, cleanup |
 
 ### Acceptance Criteria
 - `make up` starts all services in < 60 seconds with no manual configuration.
 - `./gradlew bootRun` with `local` profile starts producer and it can produce to local Kafka.
 - DynamoDB tables exist and accept writes from the consumer on local profile.
-- Kafka UI shows the `t20-match-scores` topic and consumer group lag.
+- Confluent Control Center shows the `t20-match-scores` topic and consumer group lag.
 - `docs/local-setup.md` covers all steps from a fresh checkout.
-
-### Open Decisions (To Review)
-1. **Kafka flavour**: Redpanda vs KRaft Kafka? Redpanda is simpler (1 image, admin UI included). KRaft Kafka is closer to MSK behaviour.
-2. **LocalStack vs individual images**: LocalStack Community is the simplest all-in-one. `amazon/dynamodb-local` is lighter if you only need DynamoDB for now.
-3. **3-broker local cluster?**: Adds fidelity (tests RF=3 config) but 3× the memory. Start with 1 broker for dev speed?
-4. **Init order**: Use Docker Compose `depends_on: condition: service_healthy` or a separate `localstack/wait-for.sh` script?
 
 ---
 
@@ -464,9 +458,9 @@
 
 | Status | Tasks | Subtasks |
 |--------|-------|----------|
-| ✅ Done | 3 | 25 |
+| ✅ Done | 4 | 35 |
 | 🔄 In Progress | 0 | 0 |
-| 🔲 Pending | 14 | 77 |
+| 🔲 Pending | 13 | 67 |
 | 🚫 Blocked | 0 | 0 |
 
 ---

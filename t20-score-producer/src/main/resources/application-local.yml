@@ -1,7 +1,15 @@
 # ─── LOCAL PROFILE ──────────────────────────────────────────────────────────
-# Runs against a local Kafka (docker-compose or Redpanda) on default port 9092.
-# No TLS, no SASL – plain text for developer ergonomics.
-# Start local Kafka: docker run --rm -p 9092:9092 redpandadata/redpanda redpanda start
+# Runs against the local Docker Compose stack defined in /docker-compose.yml.
+#
+# Kafka:        Confluent single broker on localhost:9092 (plain text, no auth)
+# DynamoDB:     LocalStack on http://localhost:4566
+# S3:           LocalStack on http://localhost:4566
+# SNS:          LocalStack on http://localhost:4566
+# Secrets Mgr:  LocalStack on http://localhost:4566
+#
+# Start the local stack first:   make up
+# Run the producer:              make producer
+#                           or   ./gradlew :t20-score-producer:bootRun
 
 spring:
   kafka:
@@ -10,24 +18,39 @@ spring:
       # Key = matchId (String); Value = ScoreEvent JSON (String)
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      # Reliability settings (same as prod – we always want idempotent behaviour)
+      # Reliability settings (idempotent even locally to validate config)
       acks: all
       retries: 3
       properties:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
-        compression.type: lz4
+        compression.type: lz4     # lz4 is faster than zstd on small local volumes
         linger.ms: 5
         batch.size: 16384
         delivery.timeout.ms: 30000
         request.timeout.ms: 10000
     admin:
-      auto-create: true   # Let Spring create topics automatically for local dev
+      auto-create: true            # Spring creates topics automatically for local dev
 
+# ── AWS SDK v2 pointing to LocalStack ─────────────────────────────────────────
+#
+# The LocalStack endpoint is http://localhost:4566 for all services.
+# LocalStack accepts any credentials (key/secret don't matter for community).
+# The "AWS_ACCESS_KEY_ID" and "AWS_SECRET_ACCESS_KEY" env vars just need to be set.
+#
+aws:
+  region: ap-southeast-2
+  secretsmanager:
+    secret-name: t20/producer/config
+    endpoint-override: http://localhost:4566   # Override used by TlsSaslConfig / future SDK clients
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging:
   level:
-    root: DEBUG
+    root: INFO
     com.crickscore: DEBUG
     org.apache.kafka.clients.producer: INFO
     org.apache.kafka.clients.admin: INFO
     org.springframework.kafka: INFO
+    com.amazonaws: WARN
+    software.amazon.awssdk: WARN
