@@ -29,7 +29,10 @@ import org.springframework.test.context.TestPropertySource;
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         // Disable LocalStack / AWS SDK connectivity during context load test
         "aws.dynamodb.endpoint-override=",
-        "aws.secretsmanager.endpoint-override="
+        "aws.secretsmanager.endpoint-override=",
+        // Prevent KafkaListenerContainerFactory from auto-starting consumers during
+        // context load
+        "spring.kafka.listener.auto-startup=false"
 })
 class T20ScoreConsumerApplicationTest {
 

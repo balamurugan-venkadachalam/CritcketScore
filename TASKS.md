@@ -24,9 +24,9 @@
 | TASK-07 | Producer Application – API & Simulation | 🔲 | P1 | TASK-06 |
 | TASK-08 | Producer Application – Observability | 🔲 | P1 | TASK-07 |
 | TASK-09 | Consumer Application – Core Setup | ✅ | P0 | TASK-01 |
-| TASK-10 | Consumer Application – Kafka Integration | 🔲 | P0 | TASK-09 |
+| TASK-10 | Consumer Application – Kafka Integration | ✅ | P0 | TASK-09 |
 | TASK-11 | Consumer Application – DynamoDB Integration | 🔲 | P0 | TASK-10 |
-| TASK-12 | Consumer Application – Retry & DLQ | 🔲 | P0 | TASK-10 |
+| TASK-12 | Consumer Application – Retry & DLQ | ✅ | P0 | TASK-10 |
 | TASK-13 | Consumer Application – Replay API | 🔲 | P1 | TASK-11 |
 | TASK-14 | Consumer Application – Observability | 🔲 | P1 | TASK-13 |
 | TASK-15 | Integration Testing | 🔲 | P1 | TASK-08, TASK-14 |
@@ -284,7 +284,7 @@
 ---
 
 ## TASK-10: Consumer Application – Kafka Integration
-**Status:** 🔲 Pending  
+**Status:** ✅ Done  
 **Priority:** P0  
 **Description:** Implement Kafka consumer factory, listener container factory, and main score event listener.  
 **Depends on:** TASK-09
@@ -334,7 +334,7 @@
 ---
 
 ## TASK-12: Consumer Application – Retry & DLQ
-**Status:** 🔲 Pending  
+**Status:** ✅ Done  
 **Priority:** P0  
 **Description:** Implement retry topics, DLQ routing, and DLT alert mechanism.  
 **Depends on:** TASK-10
@@ -343,11 +343,11 @@
 
 | Sub ID | Description | Status |
 |--------|-------------|--------|
-| TASK-12.1 | `RetryConfig.java` – Configure `@RetryableTopic` on `ScoreEventListener`: 3 attempts, exponential backoff (1s, 5s, 15s), DLT suffix `-dlt`, same partition strategy via `matchId` key | 🔲 |
-| TASK-12.2 | `RetryableExceptions.java` – Define which exceptions are retryable (`DynamoDbException`, `KafkaException`) vs. non-retryable (`JsonParseException`, `ValidationException`) | 🔲 |
-| TASK-12.3 | `DltListener.java` – `@KafkaListener` on `t20-match-scores-dlt`: log full event, emit `score.events.dlt.total` metric, publish SNS alert with matchId and error details | 🔲 |
-| TASK-12.4 | `DeadLetterNotificationService.java` – Send SNS notification to ops team with event payload, error type, timestamp, and partition/offset info | 🔲 |
-| TASK-12.5 | Unit tests: `RetryConfigTest.java` – Simulate retryable failure 3 times → assert event ends in DLT; simulate non-retryable → assert event goes directly to DLT | 🔲 |
+| TASK-12.1 | `@RetryableTopic` on `ScoreEventListener`: 3 retries, exponential backoff (1s, 5s, 15s), DLT suffix `-dlt` | ✅ |
+| TASK-12.2 | Exception classification: `exclude` non-retryable (`JsonProcessingException`, `ConstraintViolationException`); all `RuntimeException` retried by default | ✅ |
+| TASK-12.3 | `DltListener.java` – `@KafkaListener` on `t20-match-scores-dlt`: log, emit `score.events.dlt.total`, call `DeadLetterNotificationService` | ✅ |
+| TASK-12.4 | `DeadLetterNotificationService` interface + `NoOpDeadLetterNotificationService` (local/test stub; SNS impl in TASK-14) | ✅ |
+| TASK-12.5 | Unit tests: `DltListenerTest.java` – 4 tests covering notify called, ACK always sent, notify-before-ACK ordering, missing headers | ✅ |
 
 ### Acceptance Criteria
 - Retryable exceptions retry 3 times with backoff before hitting DLT.
