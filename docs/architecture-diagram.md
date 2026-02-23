@@ -89,16 +89,46 @@ graph LR
 
 ### Why "Filter by matchId" Doesn't Work
 
-Even if you filtered in the consumer code, multiple consumer threads would pick up messages for the same match concurrently (from a single partition or different partitions), and DynamoDB writes would race:
+#### ❌ Problem — Single Partition, Thread Pool (race condition)
+
+The consumer polls a batch and hands all messages to a thread pool simultaneously. DynamoDB writes are network I/O — completion order is **non-deterministic**:
 
 ```
-Ball 1 write starts (50ms latency) →
-Ball 2 write starts immediately (parallel) →
-Ball 3 write starts immediately (parallel) →
-Ball 3 commits ✓  Ball 2 commits ✓  Ball 1 commits ✓  ← wrong order in DynamoDB
+Time  0ms  Thread pool picks up Ball 1, Ball 2, Ball 3 at the same time
+           Worker 1 → Ball 1 DynamoDB write starts  (takes 50ms, slow network)
+           Worker 2 → Ball 2 DynamoDB write starts  (takes 15ms, fast)
+           Worker 3 → Ball 3 DynamoDB write starts  (takes 20ms, fast)
+
+Time 15ms  Ball 2 committed to DynamoDB ✓
+Time 20ms  Ball 3 committed to DynamoDB ✓
+Time 25ms  Someone reads live score → Ball 1 run is MISSING, Ball 3 recorded without Ball 1
+Time 50ms  Ball 1 committed to DynamoDB ✓  (too late, score already served incorrectly)
 ```
 
-Live score view would read incorrect totals mid-match. The `matchId` partition key + single-thread-per-partition prevents this entirely.
+> **Result:** Live score view shows wrong totals mid-match. Ball ordering in DynamoDB is corrupted.
+
+#### ✅ Fix — `matchId` Partition Key + `AckMode.RECORD` + Single Thread
+
+When all balls of a match go to **one partition** assigned to **one thread**, and `AckMode.RECORD` makes the thread **block** until each DynamoDB write completes before moving on:
+
+```
+Time  0ms  Thread 17 polls Partition 17 → gets [Ball 1, Ball 2, Ball 3]
+           → processes Ball 1 → DynamoDB write → BLOCKS (AckMode.RECORD)
+
+Time 50ms  Ball 1 write DONE ✓ → offset committed
+           → NOW processes Ball 2 → DynamoDB write → BLOCKS
+
+Time 65ms  Ball 2 write DONE ✓ → offset committed
+           → NOW processes Ball 3 → DynamoDB write → BLOCKS
+
+Time 85ms  Ball 3 write DONE ✓ → offset committed
+```
+
+> **Result:** DynamoDB always has Ball 1 before Ball 2, Ball 2 before Ball 3. Guaranteed.
+
+The two guarantees that make this work:
+1. **`matchId` partition key** → all balls of a match go to the same partition, consumed by one thread
+2. **`AckMode.RECORD` + `enable-auto-commit: false`** → thread does not move to Ball N+1 until Ball N is fully written to DynamoDB and offset committed
 
 ### Partition Count Rationale
 
