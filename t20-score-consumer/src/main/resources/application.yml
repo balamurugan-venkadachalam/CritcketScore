@@ -1,27 +1,103 @@
 spring:
   application:
     name: t20-score-consumer
+
+  # Default profile; overridden at runtime via SPRING_PROFILES_ACTIVE or --spring.profiles.active
   profiles:
     active: local
+
+  # Jackson
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+      write-date-timestamps-as-nanoseconds: false
+    deserialization:
+      fail-on-unknown-properties: false
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+  # Kafka Consumer base config
+  # Profile-specific bootstrap-servers and security are set in application-{profile}.yml
+  kafka:
+    consumer:
+      group-id: t20-score-consumer-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false          # Manual ACK via AckMode.RECORD
+      key-deserializer:   org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.records: 50             # Process 50 records per poll before pause
+        fetch.min.bytes: 1024           # Wait until at least 1 KB is available (reduces idle polls)
+        fetch.max.wait.ms: 500           # Max time to wait if fetch.min.bytes not met
+        isolation.level: read_committed  # Only read committed transactions (pairs with producer enable.idempotence)
+        # Static group membership: avoids rebalancing when a consumer restarts within session.timeout.ms
+        group.instance.id: ${HOSTNAME:consumer}-${random.uuid}
 
 server:
   port: 8082
   shutdown: graceful
+  tomcat:
+    connection-timeout: 5s
+    threads:
+      max: 200
+      min-spare: 10
 
+spring.lifecycle:
+  timeout-per-shutdown-phase: 30s
+
+# ── App-level properties (bound via AppProperties.java) ───────────────────────
+app:
+  kafka:
+    consumer:
+      concurrency: 8                     # 8 threads × 24 ECS tasks = 192 partitions consumed in parallel
+      client-id: t20-score-consumer
+    topic:
+      score-events: t20-match-scores
+      retry-1:      t20-match-scores-retry-1
+      retry-2:      t20-match-scores-retry-2
+      retry-3:      t20-match-scores-retry-3
+      dlt:          t20-match-scores-dlt
+
+  dynamodb:
+    table:
+      score-events:  t20-score-events
+      live-scores:   t20-live-scores
+      replay-state:  t20-replay-state
+
+# ── Actuator ──────────────────────────────────────────────────────────────────
 management:
   endpoints:
     web:
+      base-path: /actuator
       exposure:
-        include: health,prometheus,info,metrics
+        include: health,prometheus,info,metrics,loggers
   endpoint:
     health:
       show-details: always
+      show-components: always
+    prometheus:
+      enabled: true
   metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        score.event.processing.latency: true
+        score.dynamodb.write.latency: true
+      slo:
+        score.event.processing.latency: 250ms, 500ms, 1s
+        score.dynamodb.write.latency:   100ms, 250ms, 500ms
     tags:
       application: ${spring.application.name}
-      environment: ${spring.profiles.active}
+      environment: ${spring.profiles.active:local}
+  tracing:
+    sampling:
+      probability: 1.0
 
+# ── Logging base ──────────────────────────────────────────────────────────────
 logging:
   level:
     root: INFO
     com.crickscore: DEBUG
+    org.apache.kafka.clients: WARN
+    org.apache.kafka.common: WARN
+    software.amazon.awssdk: WARN

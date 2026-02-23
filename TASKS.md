@@ -23,7 +23,7 @@
 | TASK-06 | Producer Application – Kafka Integration | ✅ | P0 | TASK-05 |
 | TASK-07 | Producer Application – API & Simulation | 🔲 | P1 | TASK-06 |
 | TASK-08 | Producer Application – Observability | 🔲 | P1 | TASK-07 |
-| TASK-09 | Consumer Application – Core Setup | 🔲 | P0 | TASK-01 |
+| TASK-09 | Consumer Application – Core Setup | ✅ | P0 | TASK-01 |
 | TASK-10 | Consumer Application – Kafka Integration | 🔲 | P0 | TASK-09 |
 | TASK-11 | Consumer Application – DynamoDB Integration | 🔲 | P0 | TASK-10 |
 | TASK-12 | Consumer Application – Retry & DLQ | 🔲 | P0 | TASK-10 |
@@ -458,9 +458,9 @@
 
 | Status | Tasks | Subtasks |
 |--------|-------|----------|
-| ✅ Done | 4 | 35 |
+| ✅ Done | 5 | 41 |
 | 🔄 In Progress | 0 | 0 |
-| 🔲 Pending | 13 | 67 |
+| 🔲 Pending | 12 | 61 |
 | 🚫 Blocked | 0 | 0 |
 
 ---
