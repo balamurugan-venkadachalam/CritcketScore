@@ -1,0 +1,19 @@
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: t20-score-consumer-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+aws:
+  dynamodb:
+    endpoint: http://localhost:8000
+
+logging:
+  level:
+    root: DEBUG
+    com.crickscore: DEBUG
+    org.apache.kafka: WARN

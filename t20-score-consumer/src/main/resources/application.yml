@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: t20-score-consumer
+  profiles:
+    active: local
+
+server:
+  port: 8082
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active}
+
+logging:
+  level:
+    root: INFO
+    com.crickscore: DEBUG

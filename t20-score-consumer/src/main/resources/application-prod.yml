@@ -1,0 +1,24 @@
+spring:
+  kafka:
+    bootstrap-servers: ${MSK_BOOTSTRAP_SERVERS}
+    consumer:
+      group-id: t20-score-consumer-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    properties:
+      security.protocol: SASL_SSL
+      sasl.mechanism: AWS_MSK_IAM
+      sasl.jaas.config: software.amazon.msk.auth.iam.IAMLoginModule required;
+      sasl.client.callback.handler.class: software.amazon.msk.auth.iam.IAMClientCallbackHandler
+      ssl.truststore.location: /etc/ssl/certs/kafka.client.truststore.jks
+      isolation.level: read_committed
+
+aws:
+  region: ${AWS_REGION:ap-southeast-2}
+  secretsmanager:
+    secret-name: ${SECRETS_NAME:t20/consumer/config}
+
+logging:
+  level:
+    root: INFO
+    com.crickscore: INFO

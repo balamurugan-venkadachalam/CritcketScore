@@ -1,0 +1,52 @@
+# ─── PRODUCTION PROFILE ─────────────────────────────────────────────────────
+# Targets AWS MSK with TLS + SASL/IAM.
+# All sensitive values are injected via environment variables or Secrets Manager.
+
+spring:
+  kafka:
+    bootstrap-servers: ${MSK_BOOTSTRAP_SERVERS}      # e.g. b-1.xxx.kafka.ap-southeast-2.amazonaws.com:9094,...
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Reliability: idempotent producer, acks=all
+      acks: all
+      retries: 2147483647   # Integer.MAX_VALUE – let delivery.timeout govern
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        # Throughput tuning (balance with latency SLO P99 < 1s)
+        compression.type: zstd
+        linger.ms: 5
+        batch.size: 65536
+        # Timeout chain: delivery.timeout > request.timeout
+        delivery.timeout.ms: 120000   # 2 min overall
+        request.timeout.ms: 30000     # per-request
+        # Security: TLS + SASL/IAM for MSK
+        security.protocol: SASL_SSL
+        sasl.mechanism: AWS_MSK_IAM
+        sasl.jaas.config: software.amazon.msk.auth.iam.IAMLoginModule required;
+        sasl.client.callback.handler.class: software.amazon.msk.auth.iam.IAMClientCallbackHandler
+        # TLS trust store (MSK uses Amazon CA bundle)
+        ssl.truststore.location: /etc/ssl/certs/kafka.client.truststore.jks
+        ssl.truststore.type: JKS
+    admin:
+      auto-create: false   # Topics pre-created by CDK/Terraform in prod
+
+# OpenTelemetry exporter
+management:
+  otlp:
+    metrics:
+      export:
+        url: ${OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 30s
+
+aws:
+  region: ${AWS_REGION:ap-southeast-2}
+  secretsmanager:
+    secret-name: ${SECRETS_NAME:t20/producer/config}
+
+logging:
+  level:
+    root: INFO
+    com.crickscore: INFO
+    org.apache.kafka: WARN

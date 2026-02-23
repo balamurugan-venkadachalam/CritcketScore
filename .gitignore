@@ -1,0 +1,61 @@
+# ─── Java / Gradle ────────────────────────────────────────────────────────────
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Spring Boot
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+!gradle/wrapper/gradle-wrapper.jar
+
+# ─── Node / CDK ───────────────────────────────────────────────────────────────
+node_modules/
+cdk-infra/dist/
+cdk-infra/cdk.out/
+cdk-infra/*.js
+cdk-infra/*.d.ts
+!cdk-infra/jest.config.js
+cdk-infra/bin/*.js
+cdk-infra/lib/*.js
+cdk-infra/test/*.js
+
+# ─── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Secrets / Env ────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.jks
+*.truststore
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Test Coverage ────────────────────────────────────────────────────────────
+.coverage/
+coverage/
+jacoco/
