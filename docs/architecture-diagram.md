@@ -101,11 +101,29 @@ Time  0ms  Thread pool picks up Ball 1, Ball 2, Ball 3 at the same time
 
 Time 15ms  Ball 2 committed to DynamoDB ✓
 Time 20ms  Ball 3 committed to DynamoDB ✓
-Time 25ms  Someone reads live score → Ball 1 run is MISSING, Ball 3 recorded without Ball 1
-Time 50ms  Ball 1 committed to DynamoDB ✓  (too late, score already served incorrectly)
+Time 25ms  Viewer reads live score → totalRuns is WRONG (Ball 1's run not yet added)
+Time 50ms  Ball 1 committed to DynamoDB ✓  (too late — viewer already got wrong score)
 ```
 
-> **Result:** Live score view shows wrong totals mid-match. Ball ordering in DynamoDB is corrupted.
+> **Note:** The event store (`t20-score-events`) is NOT corrupted — it stores one item per ball with `eventSequence` as the sort key, so querying by `inning#over#ball` always returns events in the correct order regardless of write order.
+>
+> **What IS affected is the live score materialized view** (`t20-live-scores`).
+
+**Why the materialized view breaks:** `t20-live-scores` holds one item per match with running totals updated via DynamoDB `UpdateExpression`:
+
+```
+UpdateExpression: "ADD totalRuns :runs"   ← incremental, applied in write order
+```
+
+If Ball 3's update runs before Ball 1's:
+
+```
+Time 15ms  Ball 2 update: totalRuns += 4  →  totalRuns = 4
+Time 20ms  Ball 3 update: totalRuns += 6  →  totalRuns = 10  ← viewer sees this (Ball 1's +1 MISSING)
+Time 50ms  Ball 1 update: totalRuns += 1  →  totalRuns = 11  ← correct, but too late
+```
+
+There is also a **retry double-increment risk**: if Ball 1's write fails and retries after Ball 2 and Ball 3 already committed their Kafka offsets, Ball 1 might be re-processed. Without complex idempotency guards on every `UpdateExpression`, `totalRuns` could be incremented twice for Ball 1.
 
 #### ✅ Fix — `matchId` Partition Key + `AckMode.RECORD` + Single Thread
 
@@ -124,11 +142,11 @@ Time 65ms  Ball 2 write DONE ✓ → offset committed
 Time 85ms  Ball 3 write DONE ✓ → offset committed
 ```
 
-> **Result:** DynamoDB always has Ball 1 before Ball 2, Ball 2 before Ball 3. Guaranteed.
+> **Result:** `t20-live-scores.totalRuns` is always correct at every point in time. The viewer at `Time 25ms` would not yet see Ball 2 or Ball 3 — they'd see Ball 1 only, which is the correct partial state.
 
 The two guarantees that make this work:
 1. **`matchId` partition key** → all balls of a match go to the same partition, consumed by one thread
-2. **`AckMode.RECORD` + `enable-auto-commit: false`** → thread does not move to Ball N+1 until Ball N is fully written to DynamoDB and offset committed
+2. **`AckMode.RECORD` + `enable-auto-commit: false`** → thread does not move to Ball N+1 until Ball N is fully written and offset committed — making retries impossible to create duplicate increments
 
 ### Why Not 1 Partition + 1 Consumer?
 
