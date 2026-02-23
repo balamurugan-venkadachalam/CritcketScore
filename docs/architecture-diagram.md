@@ -200,6 +200,58 @@ Adding more ECS tasks does nothing. You can never scale horizontally beyond one 
 ---
 
 
+## Score Calculation Strategy — On-Demand vs Materialized View
+
+Two approaches exist for serving the live score to viewers:
+
+### Option A — On-Demand Calculation (Query + Aggregate)
+
+```
+GET /scores/IPL-2025-MI-CSK-001
+→ DynamoDB Query: all items where matchId = "IPL-2025-MI-CSK-001"  (120 items for a T20)
+→ Sum runs, count wickets in application layer
+→ Return result
+```
+
+| | On-Demand |
+|---|---|
+| **Consistency** | ✅ Always perfectly consistent — score IS the sum of events |
+| **Consumer simplicity** | ✅ Consumer just writes events, nothing else |
+| **Bug recovery** | ✅ Fix bugs by replaying events and recalculating |
+| **DynamoDB read cost** | ❌ 120 items read per API call — at 100k viewers polling every 3s = ~4M reads/sec |
+| **Latency** | ❌ Query + aggregate adds ~20–50ms to every response |
+| **Scale** | ❌ Read cost grows linearly with balls bowled per match |
+
+### Option B — Materialized View (what this system uses)
+
+```
+GET /scores/IPL-2025-MI-CSK-001
+→ DynamoDB GetItem: matchId = "IPL-2025-MI-CSK-001"   ← 1 read unit, ~2ms
+→ Return {totalRuns: 145, wickets: 3, currentOver: 14, currentBall: 3}
+```
+
+| | Materialized View |
+|---|---|
+| **Read cost** | ✅ O(1) — 1 read unit regardless of balls bowled |
+| **Latency** | ✅ ~2ms GetItem vs ~50ms query + aggregate |
+| **Scale** | ✅ Handles millions of reads/sec cheaply |
+| **Consumer complexity** | ❌ Consumer must maintain the view via `UpdateExpression` |
+| **Consistency** | ❌ Tiny window of inconsistency while a ball is being written (mitigated by `AckMode.RECORD`) |
+
+### Recommended Pattern — Both Together
+
+| Layer | Table | Query type | Used for |
+|-------|-------|-----------|---------|
+| **Hot path** | `t20-live-scores` | `GetItem` (1 read) | Live score endpoint — millions of viewers |
+| **Audit / replay** | `t20-score-events` | `Query` by `eventSequence` | Historical view, ball-by-ball breakdown |
+| **Consistency check** | Both | Periodic reconciliation | Verify materialized view matches aggregated events |
+
+> The on-demand approach is perfectly valid for lower traffic scenarios (internal tools, dev/test).
+> At IPL scale with millions of concurrent viewers, the O(1) materialized view is the right hot-path choice.
+
+---
+
+
 ## Key Design Decisions
 
 | Decision | Choice | Rationale |
@@ -212,4 +264,6 @@ Adding more ECS tasks does nothing. You can never scale horizontally beyond one 
 | ACK mode | `AckMode.RECORD` | Offset committed only after DynamoDB write succeeds — no message dropped silently |
 | Rebalance strategy | `CooperativeStickyAssignor` | Rolling deploys don't pause all partition consumption; only reassigned partitions pause |
 | Static membership | `group.instance.id` set | Consumer pod restart within `session.timeout.ms` rejoins without triggering a rebalance |
+| Score read strategy | Materialized view (`t20-live-scores`) | O(1) GetItem vs O(n) Query+aggregate; at millions of viewers polling every few seconds, on-demand would cost ~4M reads/sec |
 | Storage | DynamoDB PAY_PER_REQUEST | No capacity planning, scales elastically with burst traffic during popular matches |
+
