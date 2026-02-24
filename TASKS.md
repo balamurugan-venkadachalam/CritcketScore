@@ -25,7 +25,7 @@
 | TASK-08 | Producer Application – Observability | 🔲 | P1 | TASK-07 |
 | TASK-09 | Consumer Application – Core Setup | ✅ | P0 | TASK-01 |
 | TASK-10 | Consumer Application – Kafka Integration | ✅ | P0 | TASK-09 |
-| TASK-11 | Consumer Application – DynamoDB Integration | 🔲 | P0 | TASK-10 |
+| TASK-11 | Consumer Application – DynamoDB Integration | ✅ | P0 | TASK-10 |
 | TASK-12 | Consumer Application – Retry & DLQ | ✅ | P0 | TASK-10 |
 | TASK-13 | Consumer Application – Replay API | 🔲 | P1 | TASK-11 |
 | TASK-14 | Consumer Application – Observability | 🔲 | P1 | TASK-13 |
@@ -309,7 +309,7 @@
 ---
 
 ## TASK-11: Consumer Application – DynamoDB Integration
-**Status:** 🔲 Pending  
+**Status:** ✅ Done  
 **Priority:** P0  
 **Description:** Implement DynamoDB repositories for event store writes and live score materialized view updates.  
 **Depends on:** TASK-10
@@ -318,12 +318,12 @@
 
 | Sub ID | Description | Status |
 |--------|-------------|--------|
-| TASK-11.1 | `DynamoDbConfig.java` – `DynamoDbClient` bean with region, endpoint override for local, credential provider chain | 🔲 |
-| TASK-11.2 | `ScoreEventRepository.java` – `putItem()` for `t20-score-events` table using composite key `matchId` + `inning#over#ball`; conditional expression to prevent overwrites (idempotency) | 🔲 |
-| TASK-11.3 | `LiveScoreRepository.java` – `updateItem()` for `t20-live-scores` table: atomic update of `totalRuns`, `wickets`, `currentOver`, `currentBall`, `lastUpdated` using `SET` expressions | 🔲 |
-| TASK-11.4 | `ScoreEventMapper.java` – Map `ScoreEvent` → DynamoDB `AttributeValue` maps (put/update expressions) | 🔲 |
-| TASK-11.5 | Unit tests: `ScoreEventRepositoryTest.java` – DynamoDB Local or Testcontainers (localstack); assert item written with correct PK/SK; assert conditional expression rejects duplicate | 🔲 |
-| TASK-11.6 | Integration tests: `LiveScoreRepositoryTest.java` – Write 10 sequential events, assert `totalRuns` in live score matches sum | 🔲 |
+| TASK-11.1 | `DynamoDbConfig.java` – `DynamoDbClient` bean with region, endpoint override for local, credential provider chain | ✅ |
+| TASK-11.2 | `ScoreEventRepository.java` – `putItem()` for `t20-score-events` table using composite key `matchId` + `inning#over#ball`; conditional expression to prevent overwrites (idempotency) | ✅ |
+| TASK-11.3 | `LiveScoreRepository.java` – `updateItem()` for `t20-live-scores` table: atomic update of `totalRuns`, `wickets`, `currentOver`, `currentBall`, `lastUpdated` using `SET` expressions | ✅ |
+| TASK-11.4 | `ScoreEventMapper.java` – Map `ScoreEvent` → DynamoDB `AttributeValue` maps (put/update expressions) | ✅ |
+| TASK-11.5 | Unit tests: `ScoreEventRepositoryTest.java` – DynamoDB Local or Testcontainers (localstack); assert item written with correct PK/SK; assert conditional expression rejects duplicate | ✅ |
+| TASK-11.6 | Unit tests: `LiveScoreRepositoryTest.java` – Write 10 sequential events, assert `totalRuns` in live score matches sum; verify UpdateItem structure, wicket accumulation | ✅ |
 
 ### Acceptance Criteria
 - `ScoreEvent` persisted to `t20-score-events` with correct PK/SK.
@@ -458,9 +458,9 @@
 
 | Status | Tasks | Subtasks |
 |--------|-------|----------|
-| ✅ Done | 5 | 41 |
+| ✅ Done | 6 | 47 |
 | 🔄 In Progress | 0 | 0 |
-| 🔲 Pending | 12 | 61 |
+| 🔲 Pending | 11 | 55 |
 | 🚫 Blocked | 0 | 0 |
 
 ---

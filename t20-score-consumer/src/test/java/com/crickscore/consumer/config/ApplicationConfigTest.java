@@ -7,9 +7,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
 import java.time.Instant;
 
@@ -38,6 +40,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.kafka.listener.auto-startup=false"
 })
 class ApplicationConfigTest {
+
+    /** Prevents real DynamoDB client from being created during context load. */
+    @MockBean
+    DynamoDbClient dynamoDbClient;
 
     @Autowired
     private ObjectMapper objectMapper;

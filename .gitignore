@@ -4,6 +4,7 @@ build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
+!**/**/bin/
 
 # Spring Boot
 *.jar
@@ -14,6 +15,7 @@ build/
 *.tar.gz
 *.rar
 !gradle/wrapper/gradle-wrapper.jar
+/**/bin/
 
 # ─── Node / CDK ───────────────────────────────────────────────────────────────
 node_modules/
@@ -59,3 +61,4 @@ logs/
 .coverage/
 coverage/
 jacoco/
+

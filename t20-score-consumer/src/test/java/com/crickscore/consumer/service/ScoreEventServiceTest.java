@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 import java.time.Instant;
 
@@ -24,11 +25,16 @@ import static org.mockito.Mockito.*;
  * Unit tests for {@link ScoreEventService}.
  *
  * <p>
+ * Idempotency is now enforced by a DynamoDB conditional write (TASK-11):
+ * {@link ConditionalCheckFailedException} from
+ * {@link ScoreEventRepository#save}
+ * signals a duplicate — the service catches it and skips the live score update.
+ *
+ * <p>
  * Covers:
  * <ul>
- * <li>New event: idempotency passes → save() and update() both called once</li>
- * <li>Duplicate event: idempotency fails → save() and update() never
- * called</li>
+ * <li>New event: save() and update() both called exactly once</li>
+ * <li>Duplicate: DynamoDB conditional check fires → update() never called</li>
  * <li>Repository exception propagates (no silent swallowing)</li>
  * </ul>
  */
@@ -36,8 +42,6 @@ import static org.mockito.Mockito.*;
 @MockitoSettings(strictness = Strictness.STRICT_STUBS)
 class ScoreEventServiceTest {
 
-    @Mock
-    private IdempotencyService idempotencyService;
     @Mock
     private ScoreEventRepository scoreEventRepository;
     @Mock
@@ -52,13 +56,12 @@ class ScoreEventServiceTest {
     @BeforeEach
     void setUp() {
         service = new ScoreEventService(
-                idempotencyService,
                 scoreEventRepository,
                 liveScoreRepository,
                 new SimpleMeterRegistry());
     }
 
-    // ─── New event ─────────────────────────────────────────────────────────────
+    // ── New event ─────────────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("New event (not a duplicate)")
@@ -67,19 +70,15 @@ class ScoreEventServiceTest {
         @Test
         @DisplayName("calls save() and update() each exactly once")
         void newEvent_saveAndUpdateCalled() {
-            when(idempotencyService.isDuplicate(EVENT_ID)).thenReturn(false);
-
             service.process(buildEvent(), TRACE_ID);
 
             verify(scoreEventRepository, times(1)).save(any(ScoreEvent.class));
-            verify(liveScoreRepository,  times(1)).update(any(ScoreEvent.class));
+            verify(liveScoreRepository, times(1)).update(any(ScoreEvent.class));
         }
 
         @Test
         @DisplayName("calls save() BEFORE update() (crash-safe ordering)")
         void newEvent_saveBeforeUpdate() {
-            when(idempotencyService.isDuplicate(EVENT_ID)).thenReturn(false);
-
             var inOrder = inOrder(scoreEventRepository, liveScoreRepository);
 
             service.process(buildEvent(), TRACE_ID);
@@ -91,43 +90,56 @@ class ScoreEventServiceTest {
         @Test
         @DisplayName("works correctly when traceId is null")
         void newEvent_nullTraceId_doesNotFail() {
-            when(idempotencyService.isDuplicate(EVENT_ID)).thenReturn(false);
-
             service.process(buildEvent(), null);
 
             verify(scoreEventRepository, times(1)).save(any());
-            verify(liveScoreRepository,  times(1)).update(any());
+            verify(liveScoreRepository, times(1)).update(any());
         }
     }
 
-    // ─── Duplicate event ──────────────────────────────────────────────────────
+    // ── Duplicate event ───────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("Duplicate event (already processed)")
+    @DisplayName("Duplicate event (DynamoDB conditional check fires)")
     class DuplicateEvent {
 
         @Test
-        @DisplayName("skips save() and update() entirely")
-        void duplicateEvent_skipsBothWrites() {
-            when(idempotencyService.isDuplicate(EVENT_ID)).thenReturn(true);
+        @DisplayName("skips update() when save() throws ConditionalCheckFailedException")
+        void duplicate_skipsLiveScoreUpdate() {
+            ConditionalCheckFailedException ddbEx = (ConditionalCheckFailedException) ConditionalCheckFailedException
+                    .builder()
+                    .message("The conditional request failed")
+                    .build();
+            doThrow(ddbEx).when(scoreEventRepository).save(any());
 
+            service.process(buildEvent(), TRACE_ID); // must NOT throw
+
+            verify(liveScoreRepository, never()).update(any());
+        }
+
+        @Test
+        @DisplayName("does NOT propagate ConditionalCheckFailedException to the caller")
+        void duplicate_doesNotPropagateDdbException() {
+            ConditionalCheckFailedException ddbEx = (ConditionalCheckFailedException) ConditionalCheckFailedException
+                    .builder()
+                    .message("The conditional request failed")
+                    .build();
+            doThrow(ddbEx).when(scoreEventRepository).save(any());
+
+            // Calling process() on a duplicate must return cleanly — no exception
             service.process(buildEvent(), TRACE_ID);
-
-            verify(scoreEventRepository, never()).save(any());
-            verify(liveScoreRepository,  never()).update(any());
         }
     }
 
-    // ─── Repository failure ───────────────────────────────────────────────────
+    // ── Repository failure ────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("Repository failure")
+    @DisplayName("Repository failure (transient — will be retried by @RetryableTopic)")
     class RepositoryFailure {
 
         @Test
-        @DisplayName("save() exception propagates — update() never called, caller handles retry")
+        @DisplayName("save() RuntimeException propagates — update() never called")
         void saveThrows_exceptionPropagates_updateNotCalled() {
-            when(idempotencyService.isDuplicate(EVENT_ID)).thenReturn(false);
             doThrow(new RuntimeException("DynamoDB timeout"))
                     .when(scoreEventRepository).save(any());
 
@@ -139,9 +151,8 @@ class ScoreEventServiceTest {
         }
 
         @Test
-        @DisplayName("update() exception propagates after save() succeeded")
+        @DisplayName("update() RuntimeException propagates after save() succeeded")
         void updateThrows_exceptionPropagates() {
-            when(idempotencyService.isDuplicate(EVENT_ID)).thenReturn(false);
             doThrow(new RuntimeException("DynamoDB update failed"))
                     .when(liveScoreRepository).update(any());
 
@@ -149,7 +160,6 @@ class ScoreEventServiceTest {
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("DynamoDB update failed");
 
-            // save() was still called once (before the update failure)
             verify(scoreEventRepository, times(1)).save(any());
         }
     }

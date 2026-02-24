@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
  */
 @Slf4j
 @Repository
-@Profile({ "local", "test" })
+@Profile("unit-test")
 public class NoOpLiveScoreRepository implements LiveScoreRepository {
 
     @Override

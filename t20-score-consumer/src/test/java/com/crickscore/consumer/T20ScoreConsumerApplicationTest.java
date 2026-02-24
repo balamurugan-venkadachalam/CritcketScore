@@ -3,9 +3,11 @@ package com.crickscore.consumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
 /**
  * Smoke test — verifies the Spring application context starts successfully.
@@ -35,6 +37,13 @@ import org.springframework.test.context.TestPropertySource;
         "spring.kafka.listener.auto-startup=false"
 })
 class T20ScoreConsumerApplicationTest {
+
+    /**
+     * Prevents real DynamoDB client from being created; repositories are wired with
+     * this mock.
+     */
+    @MockBean
+    DynamoDbClient dynamoDbClient;
 
     @Test
     @DisplayName("Spring application context loads without errors")

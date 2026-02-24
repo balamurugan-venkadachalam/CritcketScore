@@ -19,7 +19,7 @@ import org.springframework.stereotype.Repository;
  */
 @Slf4j
 @Repository
-@Profile({ "local", "test" })
+@Profile("unit-test")
 public class NoOpScoreEventRepository implements ScoreEventRepository {
 
     @Override
