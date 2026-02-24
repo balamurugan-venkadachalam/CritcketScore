@@ -1,0 +1,665 @@
+openapi: 3.0.3
+info:
+  title: T20 Live Scoring API
+  description: |
+    Real-time T20 cricket score streaming system API.
+    
+    ## Producer Service
+    - Score event ingestion
+    - Match simulation for testing
+    
+    ## Consumer Service
+    - Event replay from DynamoDB
+    - Replay status monitoring
+  version: 1.0.0
+  contact:
+    name: T20 Scoring Team
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: http://localhost:8081
+    description: Producer Service (Local)
+  - url: http://localhost:8082
+    description: Consumer Service (Local)
+  - url: https://{alb-dns}
+    description: Production (AWS ALB)
+    variables:
+      alb-dns:
+        default: t20-score-alb-123456789.ap-southeast-2.elb.amazonaws.com
+
+tags:
+  - name: Score Ingestion
+    description: Submit score events to Kafka
+  - name: Match Simulation
+    description: Generate realistic match events for testing
+  - name: Event Replay
+    description: Replay events from DynamoDB
+  - name: Health & Metrics
+    description: Service health and observability endpoints
+
+paths:
+  # ==================== PRODUCER ENDPOINTS ====================
+  
+  /api/v1/scores:
+    post:
+      tags:
+        - Score Ingestion
+      summary: Submit a score event
+      description: |
+        Accepts a single ball-delivery event and publishes it to Kafka topic `t20-match-scores`.
+        
+        Returns `202 Accepted` immediately (fire-and-forget). The event is queued for async processing.
+        Use the returned `eventId` to track the event through downstream systems.
+        
+        **Partition Key**: `matchId` ensures all events for the same match go to the same Kafka partition,
+        guaranteeing strict ordering per match.
+      operationId: publishScoreEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScoreEventRequest'
+            examples:
+              validBoundary:
+                summary: Boundary (4 runs)
+                value:
+                  matchId: IPL-2025-MI-CSK-001
+                  inning: 1
+                  over: 3
+                  ball: 4
+                  team: MI
+                  runs: 4
+                  wicket: false
+                  totalRuns: 54
+                  wickets: 2
+              validWicket:
+                summary: Wicket
+                value:
+                  matchId: IPL-2025-RCB-KKR-001
+                  inning: 2
+                  over: 19
+                  ball: 6
+                  team: KKR
+                  runs: 1
+                  wicket: true
+                  totalRuns: 185
+                  wickets: 6
+      responses:
+        '202':
+          description: Score event accepted for publishing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreEventResponse'
+              example:
+                eventId: 550e8400-e29b-41d4-a716-446655440000
+                matchId: IPL-2025-MI-CSK-001
+                message: Score event accepted for publishing
+        '400':
+          description: Validation failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+              example:
+                type: https://crickscore.io/errors/validation
+                title: Validation Failed
+                status: 400
+                detail: Request body validation failed with 2 error(s)
+                instance: /api/v1/scores
+                properties:
+                  errors:
+                    - field: matchId
+                      message: matchId must not be blank
+                    - field: runs
+                      message: runs must be <= 6
+                      rejectedValue: "7"
+                  timestamp: "2025-04-15T14:32:01.123Z"
+        '503':
+          description: Kafka send failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+              example:
+                type: https://crickscore.io/errors/kafka-send-failure
+                title: Score Event Publish Failed
+                status: 503
+                detail: Failed to publish score event to Kafka — please retry
+                instance: /api/v1/scores
+                properties:
+                  timestamp: "2025-04-15T14:32:01.123Z"
+
+  /api/v1/simulate:
+    post:
+      tags:
+        - Match Simulation
+      summary: Start match simulation
+      description: |
+        Starts a ball-by-ball simulation for one or more matches. Generates realistic T20 events
+        with configurable delay between deliveries.
+        
+        **Use Cases:**
+        - Manual testing without real scoring feed
+        - Load testing (spin up N concurrent matches)
+        - Demo scenarios for UI dashboards
+        
+        **Concurrency**: Only 1 simulation per `matchId` at a time. Already-running matches are skipped.
+      operationId: startSimulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulateRequest'
+            examples:
+              singleMatch:
+                summary: Single match, fast simulation
+                value:
+                  matchIds:
+                    - IPL-2025-MI-CSK-001
+                  ballDelayMs: 1000
+              multipleMatches:
+                summary: Multiple matches, realistic timing
+                value:
+                  matchIds:
+                    - IPL-2025-MI-CSK-001
+                    - IPL-2025-RCB-KKR-001
+                    - IPL-2025-DC-SRH-001
+                  ballDelayMs: 20000
+      responses:
+        '202':
+          description: Simulation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulateResponse'
+              example:
+                started:
+                  - IPL-2025-MI-CSK-001
+                  - IPL-2025-RCB-KKR-001
+                ballDelayMs: 5000
+                message: Simulation started for 2 match(es)
+
+  /api/v1/simulate/{matchId}:
+    delete:
+      tags:
+        - Match Simulation
+      summary: Stop match simulation
+      description: Stops the running simulation for a specific match.
+      operationId: stopSimulation
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: IPL-2025-MI-CSK-001
+      responses:
+        '200':
+          description: Simulation stopped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matchId:
+                    type: string
+                  message:
+                    type: string
+              example:
+                matchId: IPL-2025-MI-CSK-001
+                message: Simulation stopped
+        '404':
+          description: No active simulation found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matchId:
+                    type: string
+                  message:
+                    type: string
+              example:
+                matchId: IPL-2025-MI-CSK-001
+                message: No active simulation found for matchId=IPL-2025-MI-CSK-001
+
+  /api/v1/simulate/status:
+    get:
+      tags:
+        - Match Simulation
+      summary: List active simulations
+      description: Returns all currently running simulations with their current score state.
+      operationId: getSimulationStatus
+      responses:
+        '200':
+          description: Active simulations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationStatusResponse'
+              example:
+                activeCount: 2
+                simulations:
+                  - matchId: IPL-2025-MI-CSK-001
+                    inning: 1
+                    over: 14
+                    ball: 3
+                    totalRuns: 145
+                    wickets: 3
+                    complete: false
+                  - matchId: IPL-2025-RCB-KKR-001
+                    inning: 2
+                    over: 19
+                    ball: 6
+                    totalRuns: 185
+                    wickets: 6
+                    complete: true
+
+  # ==================== CONSUMER ENDPOINTS ====================
+
+  /api/v1/replay/{matchId}:
+    post:
+      tags:
+        - Event Replay
+      summary: Trigger event replay
+      description: |
+        Replays all events for a given match from DynamoDB (authoritative source).
+        
+        **Use Cases:**
+        - Recover from data corruption
+        - Reprocess after bug fix
+        - Backfill missing events
+        
+        **Concurrency**: Only 1 replay per `matchId` at a time. Returns `409 Conflict` if already running.
+        
+        **Source**: DynamoDB table `t20-score-events` (unlimited retention)
+      operationId: replayMatch
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: IPL-2025-MI-CSK-001
+      responses:
+        '202':
+          description: Replay started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResponse'
+              example:
+                status: STARTED
+                matchId: IPL-2025-MI-CSK-001
+                eventCount: 300
+        '409':
+          description: Replay already in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResponse'
+              example:
+                status: IN_PROGRESS
+                matchId: IPL-2025-MI-CSK-001
+                message: Replay already in progress
+
+  /api/v1/replay/{matchId}/status:
+    get:
+      tags:
+        - Event Replay
+      summary: Check replay status
+      description: Returns the current status of a replay operation.
+      operationId: getReplayStatus
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: IPL-2025-MI-CSK-001
+      responses:
+        '200':
+          description: Replay status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayStatusResponse'
+              examples:
+                inProgress:
+                  summary: Replay in progress
+                  value:
+                    status: IN_PROGRESS
+                    matchId: IPL-2025-MI-CSK-001
+                    processed: 150
+                    total: 300
+                completed:
+                  summary: Replay completed
+                  value:
+                    status: COMPLETED
+                    matchId: IPL-2025-MI-CSK-001
+                    processed: 300
+                    total: 300
+        '404':
+          description: No replay found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matchId:
+                    type: string
+                  message:
+                    type: string
+              example:
+                matchId: IPL-2025-MI-CSK-001
+                message: No replay found for matchId
+
+  # ==================== HEALTH & METRICS ====================
+
+  /actuator/health:
+    get:
+      tags:
+        - Health & Metrics
+      summary: Health check
+      description: Returns the health status of the service.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: UP
+                components:
+                  kafka:
+                    status: UP
+                  diskSpace:
+                    status: UP
+                    details:
+                      total: 500000000000
+                      free: 250000000000
+                      threshold: 10485760
+
+  /actuator/prometheus:
+    get:
+      tags:
+        - Health & Metrics
+      summary: Prometheus metrics
+      description: Returns metrics in Prometheus exposition format.
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP score_events_sent_total Total score events sent to Kafka
+                # TYPE score_events_sent_total counter
+                score_events_sent_total 12345.0
+                # HELP kafka_producer_record_send_rate Records sent per second
+                # TYPE kafka_producer_record_send_rate gauge
+                kafka_producer_record_send_rate 120.5
+
+  /actuator/info:
+    get:
+      tags:
+        - Health & Metrics
+      summary: Application info
+      description: Returns application metadata and build information.
+      operationId: getInfo
+      responses:
+        '200':
+          description: Application info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app:
+                    type: object
+                  build:
+                    type: object
+              example:
+                app:
+                  name: t20-score-producer
+                  version: 1.0.0
+                  description: T20 Live Scoring Producer Service
+                build:
+                  version: 1.0.0
+                  artifact: t20-score-producer
+                  name: t20-score-producer
+                  time: "2025-04-15T10:30:00.000Z"
+
+# ==================== COMPONENTS ====================
+
+components:
+  schemas:
+    ScoreEventRequest:
+      type: object
+      required:
+        - matchId
+        - inning
+        - over
+        - ball
+        - team
+        - runs
+        - wicket
+        - totalRuns
+        - wickets
+      properties:
+        matchId:
+          type: string
+          description: Unique match identifier (used as Kafka partition key)
+          example: IPL-2025-MI-CSK-001
+        inning:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: Innings number (1 or 2)
+          example: 1
+        over:
+          type: integer
+          minimum: 0
+          maximum: 19
+          description: Over number within innings (0-19 for T20)
+          example: 3
+        ball:
+          type: integer
+          minimum: 1
+          maximum: 9
+          description: Ball number within over (1-6, extras may exceed 6)
+          example: 4
+        team:
+          type: string
+          description: Batting team code
+          example: MI
+        runs:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: Runs scored from this delivery
+          example: 4
+        extras:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Extras (wides, no-balls, byes, leg-byes)
+          example: null
+        wicket:
+          type: boolean
+          description: Whether a wicket fell on this delivery
+          example: false
+        totalRuns:
+          type: integer
+          minimum: 0
+          description: Cumulative team total at end of this delivery
+          example: 54
+        wickets:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: Cumulative wickets at end of this delivery
+          example: 2
+
+    ScoreEventResponse:
+      type: object
+      properties:
+        eventId:
+          type: string
+          format: uuid
+          description: Auto-generated UUID for this event
+          example: 550e8400-e29b-41d4-a716-446655440000
+        matchId:
+          type: string
+          description: Match identifier
+          example: IPL-2025-MI-CSK-001
+        message:
+          type: string
+          description: Confirmation message
+          example: Score event accepted for publishing
+
+    SimulateRequest:
+      type: object
+      required:
+        - matchIds
+      properties:
+        matchIds:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: List of match IDs to simulate
+          example:
+            - IPL-2025-MI-CSK-001
+            - IPL-2025-RCB-KKR-001
+        ballDelayMs:
+          type: integer
+          minimum: 100
+          nullable: true
+          description: Delay between deliveries in milliseconds (default 20000)
+          example: 5000
+
+    SimulateResponse:
+      type: object
+      properties:
+        started:
+          type: array
+          items:
+            type: string
+          description: Match IDs that were started
+        ballDelayMs:
+          type: integer
+          description: Configured delay between balls
+        message:
+          type: string
+          description: Summary message
+
+    SimulationStatusResponse:
+      type: object
+      properties:
+        activeCount:
+          type: integer
+          description: Number of active simulations
+        simulations:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimulationStatus'
+
+    SimulationStatus:
+      type: object
+      properties:
+        matchId:
+          type: string
+        inning:
+          type: integer
+        over:
+          type: integer
+        ball:
+          type: integer
+        totalRuns:
+          type: integer
+        wickets:
+          type: integer
+        complete:
+          type: boolean
+
+    ReplayResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [STARTED, IN_PROGRESS, COMPLETED, FAILED]
+        matchId:
+          type: string
+        eventCount:
+          type: integer
+          nullable: true
+        message:
+          type: string
+          nullable: true
+
+    ReplayStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [STARTED, IN_PROGRESS, COMPLETED, FAILED]
+        matchId:
+          type: string
+        processed:
+          type: integer
+          description: Number of events processed
+        total:
+          type: integer
+          description: Total number of events to replay
+
+    ProblemDetail:
+      type: object
+      description: RFC 9457 Problem Details for HTTP APIs
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference identifying the problem type
+        title:
+          type: string
+          description: Short, human-readable summary
+        status:
+          type: integer
+          description: HTTP status code
+        detail:
+          type: string
+          description: Human-readable explanation
+        instance:
+          type: string
+          format: uri
+          description: URI reference identifying the specific occurrence
+        properties:
+          type: object
+          additionalProperties: true
+          description: Additional problem-specific properties
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+              details:
+                type: object
