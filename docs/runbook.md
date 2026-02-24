@@ -603,6 +603,512 @@ aws dynamodb update-item \
 
 ---
 
+### DynamoDB Backup & Disaster Recovery Strategy
+
+#### Why Backup & DR is Critical
+
+**Business Impact:**
+- **Data Loss Prevention**: Score events are authoritative source (Kafka retention only 7 days)
+- **Compliance**: Audit trail for match integrity and dispute resolution
+- **Replay Capability**: Historical data required for analytics and bug fixes
+- **Revenue Protection**: Lost data = lost viewer trust = lost revenue
+
+**Regulatory Requirements:**
+- Data retention: 7 years for audit purposes
+- Point-in-time recovery: Restore to any second within 35 days
+- Cross-region redundancy: Survive regional failures
+
+---
+
+#### DynamoDB as a Managed Service
+
+**AWS Manages:**
+✅ **Infrastructure**: No servers, storage, or hardware to manage  
+✅ **Replication**: Automatic multi-AZ replication (3 copies)  
+✅ **Durability**: 99.999999999% (11 nines) durability  
+✅ **Availability**: 99.99% SLA with multi-AZ deployment  
+✅ **Backups**: Automated continuous backups with PITR  
+✅ **Encryption**: At-rest and in-transit encryption managed  
+✅ **Patching**: Zero-downtime updates and security patches
+
+**You Manage:**
+- Backup retention policies
+- Restore procedures and testing
+- Cross-region replication (if needed)
+- Backup monitoring and alerting
+- DR runbooks and testing
+
+**Cost Savings vs Self-Managed:**
+```
+Self-Managed PostgreSQL:
+- 3× EC2 instances (multi-AZ): $180/month
+- EBS storage (3× 100GB): $30/month
+- Backup storage (S3): $25/month
+- DBA time (10 hours/month): $1,000/month
+Total: ~$1,235/month
+
+DynamoDB Managed:
+- On-demand capacity: $9/month
+- Backup storage: $2.50/month (PITR included)
+- DBA time: 0 hours
+Total: ~$11.50/month
+
+Savings: $1,223/month (99% reduction)
+```
+
+---
+
+#### Disaster Recovery Strategy
+
+**Recovery Objectives:**
+
+| Metric | Target | Current Implementation |
+|--------|--------|------------------------|
+| **RTO** (Recovery Time Objective) | 15 minutes | PITR restore + DNS switch |
+| **RPO** (Recovery Point Objective) | 0 seconds | Multi-AZ replication (synchronous) |
+| **Data Durability** | 99.999999999% | DynamoDB managed (11 nines) |
+| **Availability** | 99.99% | Multi-AZ automatic failover |
+
+**DR Scenarios & Response:**
+
+##### Scenario 1: Single AZ Failure
+
+**Impact:** None (automatic failover)
+
+**DynamoDB Response:**
+- Automatic failover to healthy AZ (< 1 second)
+- No data loss (synchronous replication)
+- No manual intervention required
+
+**Monitoring:**
+```bash
+# Check table status (should remain ACTIVE)
+aws dynamodb describe-table \
+  --table-name t20-score-events \
+  --query 'Table.TableStatus'
+```
+
+##### Scenario 2: Accidental Data Deletion
+
+**Impact:** Data loss, requires restore
+
+**Response Time:** 15 minutes
+
+**Recovery Steps:**
+```bash
+# 1. Stop writes to prevent further damage
+aws ecs update-service \
+  --cluster t20-score-cluster \
+  --service t20-score-consumer-service \
+  --desired-count 0
+
+# 2. Identify deletion time
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name ConsumedWriteCapacityUnits \
+  --dimensions Name=TableName,Value=t20-score-events \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 60 \
+  --statistics Sum
+
+# 3. Restore to point before deletion
+aws dynamodb restore-table-to-point-in-time \
+  --source-table-name t20-score-events \
+  --target-table-name t20-score-events-restored \
+  --restore-date-time "2025-04-15T14:30:00Z"
+
+# 4. Verify restored data
+aws dynamodb describe-table \
+  --table-name t20-score-events-restored \
+  --query 'Table.ItemCount'
+
+# 5. Switch application to restored table (update env vars)
+# 6. Resume consumer service
+```
+
+##### Scenario 3: Table Corruption
+
+**Impact:** Data integrity compromised
+
+**Response Time:** 30 minutes
+
+**Recovery Steps:**
+```bash
+# 1. Create backup of current state (for forensics)
+aws dynamodb create-backup \
+  --table-name t20-score-events \
+  --backup-name t20-score-events-corrupted-$(date +%Y%m%d-%H%M%S)
+
+# 2. Restore from last known good backup
+aws dynamodb restore-table-from-backup \
+  --target-table-name t20-score-events-clean \
+  --backup-arn arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events/backup/01234567890123-abcdef12
+
+# 3. Validate data integrity
+# 4. Switch application to clean table
+# 5. Investigate root cause from corrupted backup
+```
+
+##### Scenario 4: Regional Failure
+
+**Impact:** Complete region unavailable
+
+**Response Time:** 1 hour (manual failover)
+
+**Prerequisites:**
+- Global Tables enabled (multi-region replication)
+- Route53 health checks configured
+- Cross-region ALB setup
+
+**Recovery Steps:**
+```bash
+# 1. Verify secondary region health
+aws dynamodb describe-table \
+  --table-name t20-score-events \
+  --region us-east-1
+
+# 2. Update Route53 to point to secondary region
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --change-batch '{
+    "Changes": [{
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "api.t20scoring.com",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "Z0987654321XYZ",
+          "DNSName": "t20-alb-us-east-1.elb.amazonaws.com",
+          "EvaluateTargetHealth": true
+        }
+      }
+    }]
+  }'
+
+# 3. Monitor application in secondary region
+# 4. Communicate status to stakeholders
+```
+
+---
+
+#### Automated Backup Scheduling
+
+**Backup Strategy:**
+
+| Backup Type | Frequency | Retention | Purpose |
+|-------------|-----------|-----------|---------|
+| **PITR (Continuous)** | Automatic | 35 days | Point-in-time recovery, accidental deletes |
+| **Daily Snapshots** | 00:00 UTC | 90 days | Compliance, long-term retention |
+| **Weekly Snapshots** | Sunday 00:00 UTC | 1 year | Quarterly audits, historical analysis |
+| **Pre-Deployment** | Before each deploy | 7 days | Rollback safety net |
+| **Export to S3** | Monthly | 7 years | Archival, compliance, analytics |
+
+**Implementation:**
+
+##### 1. Enable Point-in-Time Recovery (PITR)
+
+```bash
+# Enable PITR on all tables (one-time setup)
+for table in t20-score-events t20-live-scores t20-replay-state; do
+  aws dynamodb update-continuous-backups \
+    --table-name $table \
+    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+  echo "PITR enabled for $table"
+done
+
+# Verify PITR status
+aws dynamodb describe-continuous-backups \
+  --table-name t20-score-events \
+  --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription'
+```
+
+**PITR Benefits:**
+- ✅ Automatic, no manual intervention
+- ✅ Restore to any second within 35 days
+- ✅ No performance impact
+- ✅ No additional cost (included in DynamoDB pricing)
+
+##### 2. Automated Daily Backups (EventBridge + Lambda)
+
+**Lambda Function:**
+```python
+# lambda/dynamodb-backup.py
+import boto3
+from datetime import datetime
+
+dynamodb = boto3.client('dynamodb')
+
+def lambda_handler(event, context):
+    tables = ['t20-score-events', 't20-live-scores', 't20-replay-state']
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    
+    for table_name in tables:
+        backup_name = f"{table_name}-daily-{timestamp}"
+        
+        response = dynamodb.create_backup(
+            TableName=table_name,
+            BackupName=backup_name
+        )
+        
+        print(f"Created backup: {backup_name}")
+        print(f"Backup ARN: {response['BackupDetails']['BackupArn']}")
+    
+    return {'statusCode': 200, 'body': 'Backups created successfully'}
+```
+
+**EventBridge Rule:**
+```bash
+# Create daily backup schedule (00:00 UTC)
+aws events put-rule \
+  --name dynamodb-daily-backup \
+  --schedule-expression "cron(0 0 * * ? *)" \
+  --description "Daily DynamoDB backup at midnight UTC"
+
+# Add Lambda as target
+aws events put-targets \
+  --rule dynamodb-daily-backup \
+  --targets "Id"="1","Arn"="arn:aws:lambda:ap-southeast-2:123456789012:function:dynamodb-backup"
+```
+
+##### 3. Automated Backup Cleanup (Lifecycle Management)
+
+```python
+# lambda/dynamodb-backup-cleanup.py
+import boto3
+from datetime import datetime, timedelta
+
+dynamodb = boto3.client('dynamodb')
+
+def lambda_handler(event, context):
+    # Delete daily backups older than 90 days
+    cutoff_date = datetime.now() - timedelta(days=90)
+    
+    response = dynamodb.list_backups(
+        TableName='t20-score-events',
+        TimeRangeLowerBound=datetime(2020, 1, 1),
+        TimeRangeUpperBound=cutoff_date
+    )
+    
+    for backup in response['BackupSummaries']:
+        if 'daily' in backup['BackupName']:
+            dynamodb.delete_backup(BackupArn=backup['BackupArn'])
+            print(f"Deleted old backup: {backup['BackupName']}")
+    
+    return {'statusCode': 200, 'body': 'Cleanup completed'}
+```
+
+##### 4. Monthly Export to S3 (Long-Term Archival)
+
+```bash
+# EventBridge rule for monthly export (1st of each month)
+aws events put-rule \
+  --name dynamodb-monthly-export \
+  --schedule-expression "cron(0 2 1 * ? *)" \
+  --description "Monthly DynamoDB export to S3"
+
+# Lambda to trigger export
+aws lambda create-function \
+  --function-name dynamodb-monthly-export \
+  --runtime python3.11 \
+  --handler index.lambda_handler \
+  --role arn:aws:iam::123456789012:role/lambda-dynamodb-export \
+  --code file://lambda-export.zip
+```
+
+**Export Lambda:**
+```python
+import boto3
+from datetime import datetime
+
+dynamodb = boto3.client('dynamodb')
+
+def lambda_handler(event, context):
+    table_arn = 'arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events'
+    s3_bucket = 't20-backups'
+    s3_prefix = f"exports/score-events/{datetime.now().strftime('%Y%m')}"
+    
+    response = dynamodb.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket=s3_bucket,
+        S3Prefix=s3_prefix,
+        ExportFormat='DYNAMODB_JSON'
+    )
+    
+    print(f"Export started: {response['ExportDescription']['ExportArn']}")
+    return {'statusCode': 200, 'exportArn': response['ExportDescription']['ExportArn']}
+```
+
+---
+
+#### Operational Requirements
+
+##### 1. Backup Monitoring & Alerting
+
+**CloudWatch Alarms:**
+
+```bash
+# Alert if PITR is disabled
+aws cloudwatch put-metric-alarm \
+  --alarm-name dynamodb-pitr-disabled \
+  --alarm-description "Alert if PITR is disabled on critical tables" \
+  --metric-name PointInTimeRecoveryStatus \
+  --namespace AWS/DynamoDB \
+  --statistic Average \
+  --period 300 \
+  --evaluation-periods 1 \
+  --threshold 0 \
+  --comparison-operator LessThanThreshold \
+  --alarm-actions arn:aws:sns:ap-southeast-2:123456789012:critical-alerts
+
+# Alert if backup fails
+aws cloudwatch put-metric-alarm \
+  --alarm-name dynamodb-backup-failure \
+  --alarm-description "Alert if daily backup fails" \
+  --metric-name BackupCreationFailures \
+  --namespace Custom/DynamoDB \
+  --statistic Sum \
+  --period 86400 \
+  --evaluation-periods 1 \
+  --threshold 0 \
+  --comparison-operator GreaterThanThreshold \
+  --alarm-actions arn:aws:sns:ap-southeast-2:123456789012:critical-alerts
+```
+
+**Daily Backup Verification:**
+
+```bash
+# Check if today's backup exists
+#!/bin/bash
+TODAY=$(date +%Y%m%d)
+BACKUP_COUNT=$(aws dynamodb list-backups \
+  --table-name t20-score-events \
+  --time-range-lower-bound $(date -d 'today 00:00:00' +%s) \
+  --query 'BackupSummaries[?contains(BackupName, `'$TODAY'`)] | length(@)')
+
+if [ "$BACKUP_COUNT" -eq 0 ]; then
+  echo "ERROR: No backup found for today"
+  # Send alert to PagerDuty
+  exit 1
+else
+  echo "SUCCESS: Found $BACKUP_COUNT backup(s) for today"
+fi
+```
+
+##### 2. Restore Testing (Monthly)
+
+**Test Procedure:**
+
+```bash
+# Monthly DR drill (1st Sunday of each month)
+#!/bin/bash
+
+# 1. Create test restore
+aws dynamodb restore-table-to-point-in-time \
+  --source-table-name t20-score-events \
+  --target-table-name t20-score-events-dr-test \
+  --use-latest-restorable-time
+
+# 2. Wait for restore to complete
+aws dynamodb wait table-exists --table-name t20-score-events-dr-test
+
+# 3. Verify item count matches
+ORIGINAL_COUNT=$(aws dynamodb describe-table \
+  --table-name t20-score-events \
+  --query 'Table.ItemCount' --output text)
+
+RESTORED_COUNT=$(aws dynamodb describe-table \
+  --table-name t20-score-events-dr-test \
+  --query 'Table.ItemCount' --output text)
+
+if [ "$ORIGINAL_COUNT" -eq "$RESTORED_COUNT" ]; then
+  echo "✅ DR test passed: Item counts match ($ORIGINAL_COUNT)"
+else
+  echo "❌ DR test failed: Item count mismatch (Original: $ORIGINAL_COUNT, Restored: $RESTORED_COUNT)"
+  exit 1
+fi
+
+# 4. Sample data validation
+aws dynamodb query \
+  --table-name t20-score-events-dr-test \
+  --key-condition-expression "matchId = :matchId" \
+  --expression-attribute-values '{":matchId":{"S":"IPL-2025-MI-CSK-001"}}' \
+  --limit 10
+
+# 5. Cleanup test table
+aws dynamodb delete-table --table-name t20-score-events-dr-test
+
+# 6. Document results
+echo "DR test completed at $(date)" >> /var/log/dr-tests.log
+```
+
+##### 3. Backup Retention Policy
+
+**Retention Schedule:**
+
+```bash
+# Automated retention enforcement (weekly cleanup)
+#!/bin/bash
+
+# Delete daily backups older than 90 days
+aws dynamodb list-backups \
+  --table-name t20-score-events \
+  --time-range-upper-bound $(date -d '90 days ago' +%s) \
+  --query 'BackupSummaries[?contains(BackupName, `daily`)].BackupArn' \
+  --output text | \
+while read arn; do
+  aws dynamodb delete-backup --backup-arn "$arn"
+  echo "Deleted backup: $arn"
+done
+
+# Keep weekly backups for 1 year
+aws dynamodb list-backups \
+  --table-name t20-score-events \
+  --time-range-upper-bound $(date -d '365 days ago' +%s) \
+  --query 'BackupSummaries[?contains(BackupName, `weekly`)].BackupArn' \
+  --output text | \
+while read arn; do
+  aws dynamodb delete-backup --backup-arn "$arn"
+  echo "Deleted backup: $arn"
+done
+```
+
+##### 4. Backup Cost Monitoring
+
+```bash
+# Calculate monthly backup costs
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name BackupStorageSize \
+  --dimensions Name=TableName,Value=t20-score-events \
+  --start-time $(date -d '30 days ago' --iso-8601=seconds) \
+  --end-time $(date --iso-8601=seconds) \
+  --period 2592000 \
+  --statistics Average
+
+# Backup storage cost: $0.10/GB/month
+# PITR: Included (no additional cost)
+# Export to S3: $0.11/GB (one-time) + S3 storage ($0.023/GB/month)
+```
+
+##### 5. Documentation Requirements
+
+**Maintain:**
+- ✅ Backup schedule and retention policy
+- ✅ Restore procedures (this runbook)
+- ✅ DR test results (monthly)
+- ✅ RTO/RPO metrics (quarterly review)
+- ✅ Backup cost analysis (monthly)
+- ✅ Incident post-mortems (when DR invoked)
+
+**Review Cadence:**
+- Weekly: Verify backups completed successfully
+- Monthly: DR drill and restore testing
+- Quarterly: Review RTO/RPO targets
+- Annually: Full DR plan review and update
+
+---
+
 ### Backup & Restore
 
 #### On-Demand Backups
