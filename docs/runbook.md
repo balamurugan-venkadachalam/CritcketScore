@@ -440,6 +440,398 @@ aws ecs wait services-stable \
 
 ---
 
+## DynamoDB Production Support Procedures
+
+### Query Operations (SELECT)
+
+#### Query Events for a Match
+
+```bash
+# Get all events for a specific match
+aws dynamodb query \
+  --table-name t20-score-events \
+  --key-condition-expression "matchId = :matchId" \
+  --expression-attribute-values '{":matchId":{"S":"IPL-2025-MI-CSK-001"}}' \
+  --limit 100
+
+# Get events for specific inning
+aws dynamodb query \
+  --table-name t20-score-events \
+  --key-condition-expression "matchId = :matchId AND begins_with(eventSequence, :inning)" \
+  --expression-attribute-values '{
+    ":matchId":{"S":"IPL-2025-MI-CSK-001"},
+    ":inning":{"S":"1#"}
+  }'
+
+# Get events in a specific over
+aws dynamodb query \
+  --table-name t20-score-events \
+  --key-condition-expression "matchId = :matchId AND eventSequence BETWEEN :start AND :end" \
+  --expression-attribute-values '{
+    ":matchId":{"S":"IPL-2025-MI-CSK-001"},
+    ":start":{"S":"1#03#01"},
+    ":end":{"S":"1#03#06"}
+  }'
+```
+
+#### Get Live Score
+
+```bash
+# Get current live score for a match
+aws dynamodb get-item \
+  --table-name t20-live-scores \
+  --key '{"matchId":{"S":"IPL-2025-MI-CSK-001"}}' \
+  --consistent-read
+
+# Get live scores for multiple matches (batch)
+aws dynamodb batch-get-item \
+  --request-items '{
+    "t20-live-scores": {
+      "Keys": [
+        {"matchId": {"S": "IPL-2025-MI-CSK-001"}},
+        {"matchId": {"S": "IPL-2025-RCB-KKR-001"}},
+        {"matchId": {"S": "IPL-2025-DC-SRH-001"}}
+      ],
+      "ConsistentRead": false
+    }
+  }'
+```
+
+#### Scan Operations (Use Sparingly)
+
+```bash
+# ⚠️ WARNING: Scan is expensive - use only for admin tasks
+
+# Scan with filter (find all active matches)
+aws dynamodb scan \
+  --table-name t20-live-scores \
+  --filter-expression "matchStatus = :status" \
+  --expression-attribute-values '{":status":{"S":"ACTIVE"}}' \
+  --max-items 100
+
+# Scan with projection (only specific attributes)
+aws dynamodb scan \
+  --table-name t20-score-events \
+  --projection-expression "matchId, eventId, runs, wicket" \
+  --max-items 50
+```
+
+#### Query with Pagination
+
+```bash
+# First page
+aws dynamodb query \
+  --table-name t20-score-events \
+  --key-condition-expression "matchId = :matchId" \
+  --expression-attribute-values '{":matchId":{"S":"IPL-2025-MI-CSK-001"}}' \
+  --limit 50 > page1.json
+
+# Extract LastEvaluatedKey from page1.json, then:
+aws dynamodb query \
+  --table-name t20-score-events \
+  --key-condition-expression "matchId = :matchId" \
+  --expression-attribute-values '{":matchId":{"S":"IPL-2025-MI-CSK-001"}}' \
+  --exclusive-start-key '{"matchId":{"S":"IPL-2025-MI-CSK-001"},"eventSequence":{"S":"1#10#06"}}' \
+  --limit 50
+```
+
+---
+
+### Delete Operations
+
+#### Delete Single Item
+
+```bash
+# Delete a specific event (use with caution!)
+aws dynamodb delete-item \
+  --table-name t20-score-events \
+  --key '{
+    "matchId": {"S": "IPL-2025-MI-CSK-001"},
+    "eventSequence": {"S": "1#03#04"}
+  }'
+
+# Delete with condition (only if attribute matches)
+aws dynamodb delete-item \
+  --table-name t20-score-events \
+  --key '{
+    "matchId": {"S": "IPL-2025-MI-CSK-001"},
+    "eventSequence": {"S": "1#03#04"}
+  }' \
+  --condition-expression "wicket = :false" \
+  --expression-attribute-values '{":false":{"BOOL":false}}'
+```
+
+#### Delete All Events for a Match
+
+```bash
+# ⚠️ DANGEROUS: This deletes all events for a match
+
+# Step 1: Query all items to get keys
+aws dynamodb query \
+  --table-name t20-score-events \
+  --key-condition-expression "matchId = :matchId" \
+  --expression-attribute-values '{":matchId":{"S":"IPL-2025-MI-CSK-001"}}' \
+  --projection-expression "matchId, eventSequence" \
+  --output json > keys.json
+
+# Step 2: Use batch-write-item to delete (max 25 per batch)
+aws dynamodb batch-write-item \
+  --request-items '{
+    "t20-score-events": [
+      {"DeleteRequest": {"Key": {"matchId": {"S": "IPL-2025-MI-CSK-001"}, "eventSequence": {"S": "1#00#01"}}}},
+      {"DeleteRequest": {"Key": {"matchId": {"S": "IPL-2025-MI-CSK-001"}, "eventSequence": {"S": "1#00#02"}}}},
+      ...
+    ]
+  }'
+```
+
+#### Delete with TTL (Recommended for Bulk Deletes)
+
+```bash
+# Enable TTL on table (one-time setup)
+aws dynamodb update-time-to-live \
+  --table-name t20-score-events \
+  --time-to-live-specification "Enabled=true,AttributeName=ttl"
+
+# Set TTL on items (they'll auto-delete after expiration)
+aws dynamodb update-item \
+  --table-name t20-score-events \
+  --key '{"matchId":{"S":"IPL-2025-MI-CSK-001"},"eventSequence":{"S":"1#03#04"}}' \
+  --update-expression "SET ttl = :ttl" \
+  --expression-attribute-values '{":ttl":{"N":"'$(date -d '+7 days' +%s)'"}}'
+```
+
+---
+
+### Backup & Restore
+
+#### On-Demand Backups
+
+```bash
+# Create on-demand backup
+aws dynamodb create-backup \
+  --table-name t20-score-events \
+  --backup-name t20-score-events-backup-$(date +%Y%m%d-%H%M%S)
+
+# List all backups
+aws dynamodb list-backups \
+  --table-name t20-score-events
+
+# Describe backup details
+aws dynamodb describe-backup \
+  --backup-arn arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events/backup/01234567890123-abcdef12
+
+# Delete old backup
+aws dynamodb delete-backup \
+  --backup-arn arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events/backup/01234567890123-abcdef12
+```
+
+#### Point-in-Time Recovery (PITR)
+
+```bash
+# Enable PITR (one-time setup)
+aws dynamodb update-continuous-backups \
+  --table-name t20-score-events \
+  --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+
+# Check PITR status
+aws dynamodb describe-continuous-backups \
+  --table-name t20-score-events
+
+# Restore to specific point in time
+aws dynamodb restore-table-to-point-in-time \
+  --source-table-name t20-score-events \
+  --target-table-name t20-score-events-restored \
+  --restore-date-time $(date -u -d '2 hours ago' --iso-8601=seconds)
+
+# Restore to latest restorable time
+aws dynamodb restore-table-to-point-in-time \
+  --source-table-name t20-score-events \
+  --target-table-name t20-score-events-restored \
+  --use-latest-restorable-time
+```
+
+#### Restore from Backup
+
+```bash
+# Restore table from backup
+aws dynamodb restore-table-from-backup \
+  --target-table-name t20-score-events-restored \
+  --backup-arn arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events/backup/01234567890123-abcdef12
+
+# Monitor restore progress
+aws dynamodb describe-table \
+  --table-name t20-score-events-restored \
+  --query 'Table.TableStatus'
+
+# Once ACTIVE, verify data
+aws dynamodb describe-table \
+  --table-name t20-score-events-restored \
+  --query 'Table.ItemCount'
+```
+
+#### Export to S3 (for archival/analytics)
+
+```bash
+# Export table to S3
+aws dynamodb export-table-to-point-in-time \
+  --table-arn arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events \
+  --s3-bucket t20-backups \
+  --s3-prefix exports/score-events/$(date +%Y%m%d) \
+  --export-format DYNAMODB_JSON
+
+# Check export status
+aws dynamodb describe-export \
+  --export-arn arn:aws:dynamodb:ap-southeast-2:123456789012:table/t20-score-events/export/01234567890123-abcdef12
+
+# Import from S3 (requires new table)
+aws dynamodb import-table \
+  --s3-bucket-source S3Bucket=t20-backups,S3KeyPrefix=exports/score-events/20250415 \
+  --input-format DYNAMODB_JSON \
+  --table-creation-parameters '{
+    "TableName": "t20-score-events-imported",
+    "KeySchema": [
+      {"AttributeName": "matchId", "KeyType": "HASH"},
+      {"AttributeName": "eventSequence", "KeyType": "RANGE"}
+    ],
+    "AttributeDefinitions": [
+      {"AttributeName": "matchId", "AttributeType": "S"},
+      {"AttributeName": "eventSequence", "AttributeType": "S"}
+    ],
+    "BillingMode": "PAY_PER_REQUEST"
+  }'
+```
+
+---
+
+### Partition Management & Monitoring
+
+#### Check Partition Metrics
+
+```bash
+# View consumed capacity per partition (CloudWatch)
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name ConsumedReadCapacityUnits \
+  --dimensions Name=TableName,Value=t20-score-events \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 300 \
+  --statistics Sum,Average,Maximum
+
+# Check for throttled requests (indicates hot partition)
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name UserErrors \
+  --dimensions Name=TableName,Value=t20-score-events \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 300 \
+  --statistics Sum
+```
+
+#### Identify Hot Partitions
+
+```bash
+# Enable CloudWatch Contributor Insights (one-time)
+aws dynamodb update-contributor-insights \
+  --table-name t20-score-events \
+  --contributor-insights-action ENABLE
+
+# View top partition keys by read/write activity
+aws dynamodb describe-contributor-insights \
+  --table-name t20-score-events
+
+# Get detailed insights report
+aws cloudwatch get-insight-rule-report \
+  --rule-name DynamoDBContributorInsights-t20-score-events \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds)
+```
+
+#### Partition Key Distribution Analysis
+
+```bash
+# Sample partition keys to check distribution
+aws dynamodb scan \
+  --table-name t20-score-events \
+  --projection-expression "matchId" \
+  --max-items 1000 \
+  --output json | \
+  jq -r '.Items[].matchId.S' | \
+  sort | uniq -c | sort -rn | head -20
+
+# Expected: Even distribution across matchIds
+# Red flag: One matchId appears 10× more than others
+```
+
+#### Partition Capacity Limits
+
+```
+Per Partition Limits:
+- Max 10 GB storage
+- Max 3,000 RCU (strongly consistent)
+- Max 1,000 WCU
+
+If approaching limits:
+1. Redesign partition key (add randomness)
+2. Use write sharding (append random suffix)
+3. Split data across multiple tables
+```
+
+#### Handle Hot Partition
+
+```bash
+# Temporary fix: Increase table capacity (on-demand mode auto-handles)
+aws dynamodb update-table \
+  --table-name t20-score-events \
+  --billing-mode PAY_PER_REQUEST
+
+# Long-term fix: Redesign partition key
+# Example: Add shard suffix to distribute load
+# Old: matchId = "IPL-2025-MI-CSK-001"
+# New: matchId = "IPL-2025-MI-CSK-001#0" (0-9 for 10× distribution)
+```
+
+#### Monitor Table Size & Item Count
+
+```bash
+# Get table statistics
+aws dynamodb describe-table \
+  --table-name t20-score-events \
+  --query 'Table.{
+    ItemCount:ItemCount,
+    SizeBytes:TableSizeBytes,
+    Status:TableStatus,
+    BillingMode:BillingModeSummary.BillingMode
+  }'
+
+# Estimate cost based on size
+# On-demand: $0.25/GB/month
+# Provisioned: $0.25/GB/month (same storage cost)
+```
+
+#### Partition Key Best Practices
+
+```bash
+# ✅ GOOD: High cardinality, even distribution
+PK = matchId (120 unique values, ~300 items each)
+
+# ❌ BAD: Low cardinality
+PK = inning (only 2 values → hot partition)
+
+# ❌ BAD: Uneven distribution
+PK = teamName (popular teams get 10× more traffic)
+
+# ❌ BAD: Time-based without sharding
+PK = date (all today's writes go to 1 partition)
+
+# ✅ FIX: Add shard suffix
+PK = date#shard (e.g., "2025-04-15#3")
+```
+
+---
+
 ## Contact & Escalation
 
 | Issue Type | Contact | SLA |
