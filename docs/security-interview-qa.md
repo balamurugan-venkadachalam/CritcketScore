@@ -1,0 +1,1438 @@
+# Spring Security Interview Questions & Answers
+
+## Core Security Concepts
+
+### 1. What is Spring Security and what are its key features?
+
+**Answer:**
+Spring Security is a powerful authentication and authorization framework for Java applications.
+
+**Key Features:**
+- Comprehensive authentication and authorization
+- Protection against common attacks (CSRF, Session Fixation, Clickjacking)
+- Integration with various authentication mechanisms
+- Method-level security
+- Remember-me authentication
+- LDAP integration
+- OAuth2 and OpenID Connect support
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/public/**").permitAll()
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/user/**").hasAnyRole("USER", "ADMIN")
+                .anyRequest().authenticated()
+            )
+            .formLogin(form -> form
+                .loginPage("/login")
+                .defaultSuccessUrl("/dashboard")
+                .permitAll()
+            )
+            .logout(logout -> logout
+                .logoutSuccessUrl("/login?logout")
+                .permitAll()
+            )
+            .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()));
+            
+        return http.build();
+    }
+}
+```
+
+### 2. Explain the Spring Security architecture and filter chain
+
+**Answer:**
+Spring Security uses a chain of filters to process security concerns.
+
+**Key Components:**
+
+```java
+// Security Filter Chain Order
+1. SecurityContextPersistenceFilter - Establishes SecurityContext
+2. LogoutFilter - Handles logout requests
+3. UsernamePasswordAuthenticationFilter - Processes login form
+4. BasicAuthenticationFilter - Processes HTTP Basic authentication
+5. RequestCacheAwareFilter - Restores saved requests
+6. SecurityContextHolderAwareRequestFilter - Wraps request
+7. AnonymousAuthenticationFilter - Populates anonymous authentication
+8. SessionManagementFilter - Manages sessions
+9. ExceptionTranslationFilter - Handles security exceptions
+10. FilterSecurityInterceptor - Authorizes requests
+
+// Custom filter
+@Component
+public class CustomAuthenticationFilter extends OncePerRequestFilter {
+    
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, 
+                                   HttpServletResponse response, 
+                                   FilterChain filterChain) throws ServletException, IOException {
+        String token = request.getHeader("X-Auth-Token");
+        
+        if (token != null && validateToken(token)) {
+            Authentication auth = getAuthentication(token);
+            SecurityContextHolder.getContext().setAuthentication(auth);
+        }
+        
+        filterChain.doFilter(request, response);
+    }
+    
+    private boolean validateToken(String token) {
+        // Token validation logic
+        return true;
+    }
+    
+    private Authentication getAuthentication(String token) {
+        // Extract user details from token
+        UserDetails userDetails = loadUserFromToken(token);
+        return new UsernamePasswordAuthenticationToken(
+            userDetails, null, userDetails.getAuthorities());
+    }
+}
+
+// Register custom filter
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http, 
+                                          CustomAuthenticationFilter customFilter) throws Exception {
+        http
+            .addFilterBefore(customFilter, UsernamePasswordAuthenticationFilter.class)
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated());
+            
+        return http.build();
+    }
+}
+```
+
+### 3. How do you implement custom authentication in Spring Security?
+
+**Answer:**
+Custom authentication requires implementing UserDetailsService and AuthenticationProvider.
+
+```java
+// Custom UserDetailsService
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+    
+    private final UserRepository userRepository;
+    
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        User user = userRepository.findByUsername(username)
+            .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+            
+        return org.springframework.security.core.userdetails.User.builder()
+            .username(user.getUsername())
+            .password(user.getPassword())
+            .authorities(getAuthorities(user.getRoles()))
+            .accountExpired(!user.isAccountNonExpired())
+            .accountLocked(!user.isAccountNonLocked())
+            .credentialsExpired(!user.isCredentialsNonExpired())
+            .disabled(!user.isEnabled())
+            .build();
+    }
+    
+    private Collection<? extends GrantedAuthority> getAuthorities(Set<Role> roles) {
+        return roles.stream()
+            .map(role -> new SimpleGrantedAuthority("ROLE_" + role.getName()))
+            .collect(Collectors.toList());
+    }
+}
+
+// Custom AuthenticationProvider
+@Component
+public class CustomAuthenticationProvider implements AuthenticationProvider {
+    
+    private final CustomUserDetailsService userDetailsService;
+    private final PasswordEncoder passwordEncoder;
+    
+    @Override
+    public Authentication authenticate(Authentication authentication) 
+            throws AuthenticationException {
+        String username = authentication.getName();
+        String password = authentication.getCredentials().toString();
+        
+        UserDetails user = userDetailsService.loadUserByUsername(username);
+        
+        if (!passwordEncoder.matches(password, user.getPassword())) {
+            throw new BadCredentialsException("Invalid password");
+        }
+        
+        // Additional custom validation
+        if (!isValidUser(user)) {
+            throw new DisabledException("User account is disabled");
+        }
+        
+        return new UsernamePasswordAuthenticationToken(
+            user, password, user.getAuthorities());
+    }
+    
+    @Override
+    public boolean supports(Class<?> authentication) {
+        return UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication);
+    }
+    
+    private boolean isValidUser(UserDetails user) {
+        // Custom validation logic
+        return user.isEnabled() && user.isAccountNonLocked();
+    }
+}
+
+// Configuration
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authenticationProvider(customAuthenticationProvider)
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+            .formLogin(Customizer.withDefaults());
+            
+        return http.build();
+    }
+    
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+
+### 4. Explain method-level security in Spring
+
+**Answer:**
+Method-level security allows securing individual methods using annotations.
+
+```java
+// Enable method security
+@Configuration
+@EnableMethodSecurity(prePostEnabled = true, securedEnabled = true, jsr250Enabled = true)
+public class MethodSecurityConfig {
+}
+
+// Service with method security
+@Service
+public class UserService {
+    
+    // Pre-authorization
+    @PreAuthorize("hasRole('ADMIN')")
+    public void deleteUser(Long userId) {
+        userRepository.deleteById(userId);
+    }
+    
+    // Check if user owns the resource
+    @PreAuthorize("hasRole('USER') and #userId == authentication.principal.id")
+    public User updateUser(Long userId, User user) {
+        return userRepository.save(user);
+    }
+    
+    // Post-authorization
+    @PostAuthorize("returnObject.username == authentication.principal.username")
+    public User getUserDetails(Long userId) {
+        return userRepository.findById(userId).orElseThrow();
+    }
+    
+    // Filter collection before returning
+    @PostFilter("filterObject.owner == authentication.principal.username")
+    public List<Document> getDocuments() {
+        return documentRepository.findAll();
+    }
+    
+    // Filter method arguments
+    @PreFilter("filterObject.owner == authentication.principal.username")
+    public void deleteDocuments(List<Document> documents) {
+        documentRepository.deleteAll(documents);
+    }
+    
+    // @Secured annotation
+    @Secured({"ROLE_ADMIN", "ROLE_MANAGER"})
+    public void approveOrder(Long orderId) {
+        orderRepository.updateStatus(orderId, "APPROVED");
+    }
+    
+    // JSR-250 annotations
+    @RolesAllowed("ADMIN")
+    public void systemConfiguration() {
+        // Admin only
+    }
+    
+    @PermitAll
+    public List<Product> getProducts() {
+        return productRepository.findAll();
+    }
+    
+    @DenyAll
+    public void restrictedMethod() {
+        // No one can access
+    }
+}
+
+// Custom security expression
+@Component("customSecurity")
+public class CustomSecurityExpression {
+    
+    public boolean isOwner(Long resourceId, Authentication authentication) {
+        UserDetails user = (UserDetails) authentication.getPrincipal();
+        Resource resource = resourceRepository.findById(resourceId).orElse(null);
+        return resource != null && resource.getOwner().equals(user.getUsername());
+    }
+}
+
+@Service
+public class DocumentService {
+    
+    @PreAuthorize("@customSecurity.isOwner(#documentId, authentication)")
+    public void deleteDocument(Long documentId) {
+        documentRepository.deleteById(documentId);
+    }
+}
+```
+
+### 5. How do you implement JWT authentication in Spring Security?
+
+**Answer:**
+JWT (JSON Web Token) authentication requires token generation, validation, and filter configuration.
+
+```java
+// JWT Utility
+@Component
+public class JwtTokenUtil {
+    
+    @Value("${jwt.secret}")
+    private String secret;
+    
+    @Value("${jwt.expiration}")
+    private Long expiration;
+    
+    public String generateToken(UserDetails userDetails) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("authorities", userDetails.getAuthorities());
+        
+        return Jwts.builder()
+            .setClaims(claims)
+            .setSubject(userDetails.getUsername())
+            .setIssuedAt(new Date())
+            .setExpiration(new Date(System.currentTimeMillis() + expiration * 1000))
+            .signWith(SignatureAlgorithm.HS512, secret)
+            .compact();
+    }
+    
+    public String getUsernameFromToken(String token) {
+        return getClaimFromToken(token, Claims::getSubject);
+    }
+    
+    public Date getExpirationDateFromToken(String token) {
+        return getClaimFromToken(token, Claims::getExpiration);
+    }
+    
+    public <T> T getClaimFromToken(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = getAllClaimsFromToken(token);
+        return claimsResolver.apply(claims);
+    }
+    
+    private Claims getAllClaimsFromToken(String token) {
+        return Jwts.parser()
+            .setSigningKey(secret)
+            .parseClaimsJws(token)
+            .getBody();
+    }
+    
+    public Boolean validateToken(String token, UserDetails userDetails) {
+        final String username = getUsernameFromToken(token);
+        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+    
+    private Boolean isTokenExpired(String token) {
+        final Date expiration = getExpirationDateFromToken(token);
+        return expiration.before(new Date());
+    }
+}
+
+// JWT Authentication Filter
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+    
+    private final JwtTokenUtil jwtTokenUtil;
+    private final UserDetailsService userDetailsService;
+    
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, 
+                                   HttpServletResponse response, 
+                                   FilterChain chain) throws ServletException, IOException {
+        final String requestTokenHeader = request.getHeader("Authorization");
+        
+        String username = null;
+        String jwtToken = null;
+        
+        if (requestTokenHeader != null && requestTokenHeader.startsWith("Bearer ")) {
+            jwtToken = requestTokenHeader.substring(7);
+            try {
+                username = jwtTokenUtil.getUsernameFromToken(jwtToken);
+            } catch (IllegalArgumentException e) {
+                logger.error("Unable to get JWT Token");
+            } catch (ExpiredJwtException e) {
+                logger.error("JWT Token has expired");
+            }
+        }
+        
+        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+            
+            if (jwtTokenUtil.validateToken(jwtToken, userDetails)) {
+                UsernamePasswordAuthenticationToken authToken = 
+                    new UsernamePasswordAuthenticationToken(
+                        userDetails, null, userDetails.getAuthorities());
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        }
+        
+        chain.doFilter(request, response);
+    }
+}
+
+// Authentication Controller
+@RestController
+@RequestMapping("/api/auth")
+public class AuthenticationController {
+    
+    private final AuthenticationManager authenticationManager;
+    private final JwtTokenUtil jwtTokenUtil;
+    private final UserDetailsService userDetailsService;
+    
+    @PostMapping("/login")
+    public ResponseEntity<?> createAuthenticationToken(@RequestBody LoginRequest loginRequest) {
+        try {
+            authenticate(loginRequest.getUsername(), loginRequest.getPassword());
+            
+            final UserDetails userDetails = userDetailsService
+                .loadUserByUsername(loginRequest.getUsername());
+            final String token = jwtTokenUtil.generateToken(userDetails);
+            
+            return ResponseEntity.ok(new JwtResponse(token));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new ErrorResponse("Invalid credentials"));
+        }
+    }
+    
+    private void authenticate(String username, String password) throws Exception {
+        try {
+            authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(username, password));
+        } catch (DisabledException e) {
+            throw new Exception("USER_DISABLED", e);
+        } catch (BadCredentialsException e) {
+            throw new Exception("INVALID_CREDENTIALS", e);
+        }
+    }
+}
+
+// Security Configuration
+@Configuration
+@EnableWebSecurity
+public class JwtSecurityConfig {
+    
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/auth/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint(jwtAuthenticationEntryPoint)
+            )
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            )
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+            
+        return http.build();
+    }
+    
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) 
+            throws Exception {
+        return config.getAuthenticationManager();
+    }
+}
+```
+
+### 6. Explain OAuth2 and how to implement it in Spring Security
+
+**Answer:**
+OAuth2 is an authorization framework that enables applications to obtain limited access to user accounts.
+
+```java
+// OAuth2 Resource Server Configuration
+@Configuration
+@EnableWebSecurity
+public class OAuth2ResourceServerConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/public/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+            );
+            
+        return http.build();
+    }
+    
+    @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtGrantedAuthoritiesConverter grantedAuthoritiesConverter = 
+            new JwtGrantedAuthoritiesConverter();
+        grantedAuthoritiesConverter.setAuthoritiesClaimName("roles");
+        grantedAuthoritiesConverter.setAuthorityPrefix("ROLE_");
+        
+        JwtAuthenticationConverter jwtAuthenticationConverter = 
+            new JwtAuthenticationConverter();
+        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(
+            grantedAuthoritiesConverter);
+            
+        return jwtAuthenticationConverter;
+    }
+    
+    @Bean
+    public JwtDecoder jwtDecoder() {
+        return NimbusJwtDecoder.withJwkSetUri("https://auth-server/.well-known/jwks.json")
+            .build();
+    }
+}
+
+// OAuth2 Client Configuration
+@Configuration
+@EnableWebSecurity
+public class OAuth2ClientConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/", "/login/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .oauth2Login(oauth2 -> oauth2
+                .loginPage("/login")
+                .defaultSuccessUrl("/dashboard")
+                .userInfoEndpoint(userInfo -> userInfo
+                    .userService(customOAuth2UserService())
+                )
+            )
+            .oauth2Client(Customizer.withDefaults());
+            
+        return http.build();
+    }
+    
+    @Bean
+    public OAuth2UserService<OAuth2UserRequest, OAuth2User> customOAuth2UserService() {
+        return new CustomOAuth2UserService();
+    }
+}
+
+// Custom OAuth2 User Service
+@Service
+public class CustomOAuth2UserService implements OAuth2UserService<OAuth2UserRequest, OAuth2User> {
+    
+    private final DefaultOAuth2UserService delegate = new DefaultOAuth2UserService();
+    private final UserRepository userRepository;
+    
+    @Override
+    public OAuth2User loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
+        OAuth2User oauth2User = delegate.loadUser(userRequest);
+        
+        String registrationId = userRequest.getClientRegistration().getRegistrationId();
+        String userNameAttributeName = userRequest.getClientRegistration()
+            .getProviderDetails()
+            .getUserInfoEndpoint()
+            .getUserNameAttributeName();
+            
+        OAuth2UserInfo userInfo = OAuth2UserInfoFactory.getOAuth2UserInfo(
+            registrationId, oauth2User.getAttributes());
+            
+        User user = processOAuth2User(userInfo);
+        
+        return new CustomOAuth2User(
+            oauth2User.getAuthorities(),
+            oauth2User.getAttributes(),
+            userNameAttributeName,
+            user
+        );
+    }
+    
+    private User processOAuth2User(OAuth2UserInfo userInfo) {
+        return userRepository.findByEmail(userInfo.getEmail())
+            .map(existingUser -> updateExistingUser(existingUser, userInfo))
+            .orElseGet(() -> registerNewUser(userInfo));
+    }
+}
+
+// Controller using OAuth2
+@RestController
+@RequestMapping("/api/user")
+public class UserController {
+    
+    @GetMapping("/me")
+    public ResponseEntity<?> getCurrentUser(@AuthenticationPrincipal OAuth2User principal) {
+        return ResponseEntity.ok(principal.getAttributes());
+    }
+    
+    @GetMapping("/profile")
+    public ResponseEntity<?> getUserProfile(OAuth2AuthenticationToken authentication) {
+        OAuth2User oauth2User = authentication.getPrincipal();
+        String email = oauth2User.getAttribute("email");
+        String name = oauth2User.getAttribute("name");
+        
+        return ResponseEntity.ok(Map.of("email", email, "name", name));
+    }
+}
+
+// application.yml
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - email
+              - profile
+          github:
+            client-id: ${GITHUB_CLIENT_ID}
+            client-secret: ${GITHUB_CLIENT_SECRET}
+            scope:
+              - user:email
+              - read:user
+```
+
+### 7. How do you handle CSRF protection in Spring Security?
+
+**Answer:**
+CSRF (Cross-Site Request Forgery) protection is enabled by default in Spring Security.
+
+```java
+// CSRF Configuration
+@Configuration
+@EnableWebSecurity
+public class CsrfSecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf
+                // Use cookie-based CSRF token repository
+                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                // Ignore CSRF for specific endpoints
+                .ignoringRequestMatchers("/api/public/**")
+            )
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated());
+            
+        return http.build();
+    }
+    
+    // Disable CSRF (only for stateless APIs with JWT)
+    @Bean
+    public SecurityFilterChain apiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            );
+            
+        return http.build();
+    }
+}
+
+// CSRF Token in REST API
+@RestController
+public class CsrfController {
+    
+    @GetMapping("/csrf-token")
+    public CsrfToken csrfToken(CsrfToken token) {
+        return token;
+    }
+}
+
+// Custom CSRF Token Repository
+@Component
+public class CustomCsrfTokenRepository implements CsrfTokenRepository {
+    
+    private final CsrfTokenCache tokenCache;
+    
+    @Override
+    public CsrfToken generateToken(HttpServletRequest request) {
+        String tokenValue = UUID.randomUUID().toString();
+        return new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", tokenValue);
+    }
+    
+    @Override
+    public void saveToken(CsrfToken token, HttpServletRequest request, 
+                         HttpServletResponse response) {
+        String key = getSessionId(request);
+        if (token == null) {
+            tokenCache.remove(key);
+        } else {
+            tokenCache.put(key, token);
+        }
+    }
+    
+    @Override
+    public CsrfToken loadToken(HttpServletRequest request) {
+        String key = getSessionId(request);
+        return tokenCache.get(key);
+    }
+    
+    private String getSessionId(HttpServletRequest request) {
+        HttpSession session = request.getSession(false);
+        return session != null ? session.getId() : null;
+    }
+}
+
+// Frontend integration (JavaScript)
+// Fetch CSRF token and include in requests
+fetch('/csrf-token')
+    .then(response => response.json())
+    .then(data => {
+        const csrfToken = data.token;
+        
+        // Include in POST request
+        fetch('/api/data', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': csrfToken
+            },
+            body: JSON.stringify(payload)
+        });
+    });
+```
+
+### 8. Explain password encoding and best practices in Spring Security
+
+**Answer:**
+Spring Security provides multiple password encoding strategies.
+
+```java
+// Password Encoder Configuration
+@Configuration
+public class PasswordEncoderConfig {
+    
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        // BCrypt (Recommended)
+        return new BCryptPasswordEncoder(12); // strength parameter
+    }
+    
+    // Alternative encoders
+    @Bean
+    public PasswordEncoder scryptEncoder() {
+        return new SCryptPasswordEncoder();
+    }
+    
+    @Bean
+    public PasswordEncoder argon2Encoder() {
+        return new Argon2PasswordEncoder();
+    }
+    
+    // Delegating encoder for migration
+    @Bean
+    public PasswordEncoder delegatingEncoder() {
+        String encodingId = "bcrypt";
+        Map<String, PasswordEncoder> encoders = new HashMap<>();
+        encoders.put(encodingId, new BCryptPasswordEncoder());
+        encoders.put("scrypt", new SCryptPasswordEncoder());
+        encoders.put("pbkdf2", new Pbkdf2PasswordEncoder());
+        encoders.put("sha256", new StandardPasswordEncoder());
+        
+        DelegatingPasswordEncoder delegatingEncoder = 
+            new DelegatingPasswordEncoder(encodingId, encoders);
+        delegatingEncoder.setDefaultPasswordEncoderForMatches(new BCryptPasswordEncoder());
+        
+        return delegatingEncoder;
+    }
+}
+
+// User Registration Service
+@Service
+public class UserRegistrationService {
+    
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    
+    public User registerUser(RegistrationRequest request) {
+        // Validate password strength
+        validatePasswordStrength(request.getPassword());
+        
+        User user = new User();
+        user.setUsername(request.getUsername());
+        user.setEmail(request.getEmail());
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        user.setRoles(Set.of(new Role("USER")));
+        
+        return userRepository.save(user);
+    }
+    
+    private void validatePasswordStrength(String password) {
+        if (password.length() < 8) {
+            throw new WeakPasswordException("Password must be at least 8 characters");
+        }
+        
+        boolean hasUpperCase = password.chars().anyMatch(Character::isUpperCase);
+        boolean hasLowerCase = password.chars().anyMatch(Character::isLowerCase);
+        boolean hasDigit = password.chars().anyMatch(Character::isDigit);
+        boolean hasSpecial = password.chars().anyMatch(ch -> "!@#$%^&*".indexOf(ch) >= 0);
+        
+        if (!(hasUpperCase && hasLowerCase && hasDigit && hasSpecial)) {
+            throw new WeakPasswordException(
+                "Password must contain uppercase, lowercase, digit, and special character");
+        }
+    }
+    
+    public void changePassword(Long userId, String oldPassword, String newPassword) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new UserNotFoundException(userId));
+            
+        if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
+            throw new BadCredentialsException("Current password is incorrect");
+        }
+        
+        validatePasswordStrength(newPassword);
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+    }
+}
+
+// Password Reset Service
+@Service
+public class PasswordResetService {
+    
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final PasswordResetTokenRepository tokenRepository;
+    
+    public void initiatePasswordReset(String email) {
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new UserNotFoundException(email));
+            
+        String token = UUID.randomUUID().toString();
+        PasswordResetToken resetToken = new PasswordResetToken();
+        resetToken.setToken(token);
+        resetToken.setUser(user);
+        resetToken.setExpiryDate(LocalDateTime.now().plusHours(24));
+        
+        tokenRepository.save(resetToken);
+        
+        // Send email with reset link
+        sendPasswordResetEmail(user.getEmail(), token);
+    }
+    
+    public void resetPassword(String token, String newPassword) {
+        PasswordResetToken resetToken = tokenRepository.findByToken(token)
+            .orElseThrow(() -> new InvalidTokenException("Invalid reset token"));
+            
+        if (resetToken.getExpiryDate().isBefore(LocalDateTime.now())) {
+            throw new TokenExpiredException("Reset token has expired");
+        }
+        
+        User user = resetToken.getUser();
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+        
+        tokenRepository.delete(resetToken);
+    }
+}
+```
+
+### 9. How do you implement Remember-Me authentication?
+
+**Answer:**
+Remember-Me allows users to stay authenticated across sessions.
+
+```java
+// Remember-Me Configuration
+@Configuration
+@EnableWebSecurity
+public class RememberMeSecurityConfig {
+    
+    private final UserDetailsService userDetailsService;
+    private final DataSource dataSource;
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+            .formLogin(Customizer.withDefaults())
+            .rememberMe(remember -> remember
+                .key("uniqueAndSecret")
+                .tokenValiditySeconds(86400) // 24 hours
+                .userDetailsService(userDetailsService)
+                .rememberMeParameter("remember-me")
+                .rememberMeCookieName("my-remember-me")
+            );
+            
+        return http.build();
+    }
+    
+    // Persistent token-based Remember-Me
+    @Bean
+    public SecurityFilterChain persistentRememberMe(HttpSecurity http) throws Exception {
+        http
+            .rememberMe(remember -> remember
+                .tokenRepository(persistentTokenRepository())
+                .userDetailsService(userDetailsService)
+                .tokenValiditySeconds(604800) // 7 days
+            );
+            
+        return http.build();
+    }
+    
+    @Bean
+    public PersistentTokenRepository persistentTokenRepository() {
+        JdbcTokenRepositoryImpl tokenRepository = new JdbcTokenRepositoryImpl();
+        tokenRepository.setDataSource(dataSource);
+        return tokenRepository;
+    }
+}
+
+// Custom Remember-Me Service
+@Component
+public class CustomRememberMeServices extends PersistentTokenBasedRememberMeServices {
+    
+    private final UserRepository userRepository;
+    
+    public CustomRememberMeServices(String key, 
+                                   UserDetailsService userDetailsService,
+                                   PersistentTokenRepository tokenRepository,
+                                   UserRepository userRepository) {
+        super(key, userDetailsService, tokenRepository);
+        this.userRepository = userRepository;
+    }
+    
+    @Override
+    protected void onLoginSuccess(HttpServletRequest request, 
+                                 HttpServletResponse response,
+                                 Authentication successfulAuthentication) {
+        String username = successfulAuthentication.getName();
+        logger.info("Remember-Me login successful for user: " + username);
+        
+        // Update last login time
+        userRepository.findByUsername(username)
+            .ifPresent(user -> {
+                user.setLastLoginDate(LocalDateTime.now());
+                userRepository.save(user);
+            });
+            
+        super.onLoginSuccess(request, response, successfulAuthentication);
+    }
+}
+
+// Database schema for persistent tokens
+CREATE TABLE persistent_logins (
+    username VARCHAR(64) NOT NULL,
+    series VARCHAR(64) PRIMARY KEY,
+    token VARCHAR(64) NOT NULL,
+    last_used TIMESTAMP NOT NULL
+);
+```
+
+### 10. Explain session management and concurrent session control
+
+**Answer:**
+Spring Security provides comprehensive session management capabilities.
+
+```java
+// Session Management Configuration
+@Configuration
+@EnableWebSecurity
+public class SessionManagementConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .sessionManagement(session -> session
+                // Session creation policy
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                
+                // Concurrent session control
+                .maximumSessions(1)
+                .maxSessionsPreventsLogin(true) // Prevent new login
+                .expiredUrl("/session-expired")
+                .sessionRegistry(sessionRegistry())
+            )
+            .sessionManagement(session -> session
+                // Session fixation protection
+                .sessionFixation().migrateSession()
+                
+                // Invalid session handling
+                .invalidSessionUrl("/invalid-session")
+            );
+            
+        return http.build();
+    }
+    
+    @Bean
+    public SessionRegistry sessionRegistry() {
+        return new SessionRegistryImpl();
+    }
+    
+    @Bean
+    public HttpSessionEventPublisher httpSessionEventPublisher() {
+        return new HttpSessionEventPublisher();
+    }
+}
+
+// Session Controller
+@RestController
+@RequestMapping("/api/sessions")
+public class SessionController {
+    
+    private final SessionRegistry sessionRegistry;
+    
+    @GetMapping("/active")
+    public List<SessionInfo> getActiveSessions() {
+        return sessionRegistry.getAllPrincipals().stream()
+            .flatMap(principal -> sessionRegistry.getAllSessions(principal, false).stream())
+            .map(session -> new SessionInfo(
+                session.getSessionId(),
+                session.getLastRequest(),
+                session.isExpired()
+            ))
+            .collect(Collectors.toList());
+    }
+    
+    @DeleteMapping("/{sessionId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public void invalidateSession(@PathVariable String sessionId) {
+        SessionInformation sessionInfo = sessionRegistry.getSessionInformation(sessionId);
+        if (sessionInfo != null) {
+            sessionInfo.expireNow();
+        }
+    }
+    
+    @PostMapping("/invalidate-all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public void invalidateAllSessions(@RequestParam String username) {
+        sessionRegistry.getAllPrincipals().stream()
+            .filter(principal -> principal.toString().equals(username))
+            .forEach(principal -> 
+                sessionRegistry.getAllSessions(principal, false)
+                    .forEach(SessionInformation::expireNow)
+            );
+    }
+}
+
+// Custom Session Authentication Strategy
+@Component
+public class CustomSessionAuthenticationStrategy extends ConcurrentSessionControlAuthenticationStrategy {
+    
+    private final UserActivityRepository activityRepository;
+    
+    public CustomSessionAuthenticationStrategy(SessionRegistry sessionRegistry,
+                                              UserActivityRepository activityRepository) {
+        super(sessionRegistry);
+        this.activityRepository = activityRepository;
+    }
+    
+    @Override
+    public void onAuthentication(Authentication authentication, 
+                                HttpServletRequest request, 
+                                HttpServletResponse response) {
+        super.onAuthentication(authentication, request, response);
+        
+        // Log user activity
+        UserActivity activity = new UserActivity();
+        activity.setUsername(authentication.getName());
+        activity.setIpAddress(request.getRemoteAddr());
+        activity.setUserAgent(request.getHeader("User-Agent"));
+        activity.setLoginTime(LocalDateTime.now());
+        
+        activityRepository.save(activity);
+    }
+}
+
+// Stateless session for REST APIs
+@Configuration
+@EnableWebSecurity
+public class StatelessSecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain statelessFilterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            )
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated());
+            
+        return http.build();
+    }
+}
+```
+
+### 11. How do you implement role-based and permission-based access control?
+
+**Answer:**
+Spring Security supports both role-based (RBAC) and permission-based access control.
+
+```java
+// User Entity with Roles and Permissions
+@Entity
+@Table(name = "users")
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String username;
+    private String password;
+    
+    @ManyToMany(fetch = FetchType.EAGER)
+    @JoinTable(
+        name = "user_roles",
+        joinColumns = @JoinColumn(name = "user_id"),
+        inverseJoinColumns = @JoinColumn(name = "role_id")
+    )
+    private Set<Role> roles = new HashSet<>();
+}
+
+@Entity
+@Table(name = "roles")
+public class Role {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String name; // ROLE_USER, ROLE_ADMIN
+    
+    @ManyToMany(fetch = FetchType.EAGER)
+    @JoinTable(
+        name = "role_permissions",
+        joinColumns = @JoinColumn(name = "role_id"),
+        inverseJoinColumns = @JoinColumn(name = "permission_id")
+    )
+    private Set<Permission> permissions = new HashSet<>();
+}
+
+@Entity
+@Table(name = "permissions")
+public class Permission {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String name; // READ_USERS, WRITE_USERS, DELETE_USERS
+}
+
+// Custom UserDetailsService with Permissions
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+    
+    private final UserRepository userRepository;
+    
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        User user = userRepository.findByUsernameWithRolesAndPermissions(username)
+            .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+            
+        Set<GrantedAuthority> authorities = new HashSet<>();
+        
+        // Add roles
+        user.getRoles().forEach(role -> {
+            authorities.add(new SimpleGrantedAuthority("ROLE_" + role.getName()));
+            
+            // Add permissions from roles
+            role.getPermissions().forEach(permission -> 
+                authorities.add(new SimpleGrantedAuthority(permission.getName()))
+            );
+        });
+        
+        return new org.springframework.security.core.userdetails.User(
+            user.getUsername(),
+            user.getPassword(),
+            authorities
+        );
+    }
+}
+
+// Role-based Access Control
+@RestController
+@RequestMapping("/api/admin")
+public class AdminController {
+    
+    @GetMapping("/users")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<User> getAllUsers() {
+        return userService.findAll();
+    }
+    
+    @PostMapping("/users")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    public User createUser(@RequestBody User user) {
+        return userService.save(user);
+    }
+}
+
+// Permission-based Access Control
+@RestController
+@RequestMapping("/api/documents")
+public class DocumentController {
+    
+    @GetMapping
+    @PreAuthorize("hasAuthority('READ_DOCUMENTS')")
+    public List<Document> getDocuments() {
+        return documentService.findAll();
+    }
+    
+    @PostMapping
+    @PreAuthorize("hasAuthority('WRITE_DOCUMENTS')")
+    public Document createDocument(@RequestBody Document document) {
+        return documentService.save(document);
+    }
+    
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('DELETE_DOCUMENTS')")
+    public void deleteDocument(@PathVariable Long id) {
+        documentService.delete(id);
+    }
+    
+    // Combined role and permission check
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN') or hasAuthority('UPDATE_DOCUMENTS')")
+    public Document updateDocument(@PathVariable Long id, @RequestBody Document document) {
+        return documentService.update(id, document);
+    }
+}
+
+// Custom Permission Evaluator
+@Component
+public class CustomPermissionEvaluator implements PermissionEvaluator {
+    
+    private final DocumentRepository documentRepository;
+    
+    @Override
+    public boolean hasPermission(Authentication authentication, 
+                                Object targetDomainObject, 
+                                Object permission) {
+        if (authentication == null || targetDomainObject == null || !(permission instanceof String)) {
+            return false;
+        }
+        
+        String targetType = targetDomainObject.getClass().getSimpleName().toUpperCase();
+        return hasPrivilege(authentication, targetType, permission.toString());
+    }
+    
+    @Override
+    public boolean hasPermission(Authentication authentication, 
+                                Serializable targetId, 
+                                String targetType, 
+                                Object permission) {
+        if (authentication == null || targetType == null || !(permission instanceof String)) {
+            return false;
+        }
+        
+        return hasPrivilege(authentication, targetType.toUpperCase(), permission.toString());
+    }
+    
+    private boolean hasPrivilege(Authentication auth, String targetType, String permission) {
+        return auth.getAuthorities().stream()
+            .anyMatch(grantedAuth -> 
+                grantedAuth.getAuthority().equals(permission + "_" + targetType)
+            );
+    }
+}
+
+// Using Custom Permission Evaluator
+@Service
+public class DocumentService {
+    
+    @PreAuthorize("hasPermission(#document, 'WRITE')")
+    public Document save(Document document) {
+        return documentRepository.save(document);
+    }
+    
+    @PreAuthorize("hasPermission(#id, 'Document', 'DELETE')")
+    public void delete(Long id) {
+        documentRepository.deleteById(id);
+    }
+}
+
+// Configuration for Permission Evaluator
+@Configuration
+@EnableMethodSecurity
+public class MethodSecurityConfig {
+    
+    @Bean
+    public MethodSecurityExpressionHandler methodSecurityExpressionHandler(
+            CustomPermissionEvaluator permissionEvaluator) {
+        DefaultMethodSecurityExpressionHandler handler = 
+            new DefaultMethodSecurityExpressionHandler();
+        handler.setPermissionEvaluator(permissionEvaluator);
+        return handler;
+    }
+}
+```
+
+### 12. How do you secure REST APIs with Spring Security?
+
+**Answer:**
+REST API security requires stateless authentication and proper authorization.
+
+```java
+// REST API Security Configuration
+@Configuration
+@EnableWebSecurity
+public class RestApiSecurityConfig {
+    
+    @Bean
+    @Order(1)
+    public SecurityFilterChain apiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            )
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/public/**").permitAll()
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/**").hasAnyRole("USER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/**").hasRole("ADMIN")
+                .anyRequest().authenticated()
+            )
+            .httpBasic(Customizer.withDefaults())
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint(new RestAuthenticationEntryPoint())
+                .accessDeniedHandler(new RestAccessDeniedHandler())
+            );
+            
+        return http.build();
+    }
+}
+
+// Custom Authentication Entry Point
+@Component
+public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
+    
+    @Override
+    public void commence(HttpServletRequest request, 
+                        HttpServletResponse response,
+                        AuthenticationException authException) throws IOException {
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        
+        Map<String, Object> errorResponse = new HashMap<>();
+        errorResponse.put("timestamp", LocalDateTime.now());
+        errorResponse.put("status", 401);
+        errorResponse.put("error", "Unauthorized");
+        errorResponse.put("message", authException.getMessage());
+        errorResponse.put("path", request.getRequestURI());
+        
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.writeValue(response.getOutputStream(), errorResponse);
+    }
+}
+
+// Custom Access Denied Handler
+@Component
+public class RestAccessDeniedHandler implements AccessDeniedHandler {
+    
+    @Override
+    public void handle(HttpServletRequest request, 
+                      HttpServletResponse response,
+                      AccessDeniedException accessDeniedException) throws IOException {
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        
+        Map<String, Object> errorResponse = new HashMap<>();
+        errorResponse.put("timestamp", LocalDateTime.now());
+        errorResponse.put("status", 403);
+        errorResponse.put("error", "Forbidden");
+        errorResponse.put("message", "Access denied");
+        errorResponse.put("path", request.getRequestURI());
+        
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.writeValue(response.getOutputStream(), errorResponse);
+    }
+}
+
+// API Rate Limiting
+@Component
+public class RateLimitingFilter extends OncePerRequestFilter {
+    
+    private final Map<String, RateLimiter> limiters = new ConcurrentHashMap<>();
+    
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, 
+                                   HttpServletResponse response, 
+                                   FilterChain filterChain) throws ServletException, IOException {
+        String clientId = getClientId(request);
+        RateLimiter limiter = limiters.computeIfAbsent(
+            clientId, 
+            k -> RateLimiter.create(100.0) // 100 requests per second
+        );
+        
+        if (!limiter.tryAcquire()) {
+            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            response.getWriter().write("Rate limit exceeded");
+            return;
+        }
+        
+        filterChain.doFilter(request, response);
+    }
+    
+    private String getClientId(HttpServletRequest request) {
+        String apiKey = request.getHeader("X-API-Key");
+        return apiKey != null ? apiKey : request.getRemoteAddr();
+    }
+}
+
+// API Key Authentication
+@Component
+public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
+    
+    private final ApiKeyService apiKeyService;
+    
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, 
+                                   HttpServletResponse response, 
+                                   FilterChain filterChain) throws ServletException, IOException {
+        String apiKey = request.getHeader("X-API-Key");
+        
+        if (apiKey != null && apiKeyService.isValidApiKey(apiKey)) {
+            UserDetails userDetails = apiKeyService.getUserByApiKey(apiKey);
+            UsernamePasswordAuthenticationToken authentication = 
+                new UsernamePasswordAuthenticationToken(
+                    userDetails, null, userDetails.getAuthorities());
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+        }
+        
+        filterChain.doFilter(request, response);
+    }
+}
+```
