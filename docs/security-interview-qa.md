@@ -1,5 +1,7 @@
 # Spring Security Interview Questions & Answers
 
+> **Note on Spring Boot 3 / Spring Security 6**: All examples in this document use modern Spring Security 6 syntax. This includes the use of lambda DSLs (e.g., `http.authorizeHttpRequests(auth -> ...)` instead of `http.authorizeRequests()`) and the replacement of the deprecated `antMatchers` with `requestMatchers`. The old `WebSecurityConfigurerAdapter` has been removed in favor of registering a `SecurityFilterChain` bean.
+
 ## Core Security Concepts
 
 ### 1. What is Spring Security and what are its key features?
@@ -1433,6 +1435,100 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         }
         
         filterChain.doFilter(request, response);
+    }
+}
+```
+
+### 13. What is CORS and how does it differ from CSRF? How do you configure it in Spring Security?
+
+**Answer:**
+CORS (Cross-Origin Resource Sharing) is a mechanism that allows a server to indicate any origins (domain, scheme, or port) other than its own from which a browser should permit loading resources. CSRF is an attack where a malicious site tricks a user's browser into performing an unwanted action on a trusted site where the user is authenticated. CORS relaxes the same-origin policy to enable cross-domain communication, while CSRF protection defends against abuse of existing authentication during cross-domain requests.
+
+```java
+// CORS Configuration
+@Configuration
+@EnableWebSecurity
+public class CorsSecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .csrf(csrf -> csrf.disable()) // Typical for stateless APIs
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated());
+            
+        return http.build();
+    }
+    
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(Arrays.asList("https://trusted-frontend.com"));
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type"));
+        configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L); // Cache preflight response for 1 hour
+        
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+}
+```
+
+### 14. How do you test secured endpoints in Spring Boot?
+
+**Answer:**
+Spring Security provides excellent testing support through the `spring-security-test` module, primarily using annotations to mock authenticated users during integration tests.
+
+```java
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.context.support.WithUserDetails;
+import org.springframework.test.web.servlet.MockMvc;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+class SecurityTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    // Test with an unauthenticated user
+    @Test
+    void whenUnauthenticated_thenUnauthorized() throws Exception {
+        mockMvc.perform(get("/api/admin/dashboard"))
+               .andExpect(status().isUnauthorized());
+    }
+
+    // Test with a mocked, simple user
+    @Test
+    @WithMockUser(username = "adminUser", roles = {"ADMIN"})
+    void whenAuthenticatedAsAdmin_thenSuccess() throws Exception {
+        mockMvc.perform(get("/api/admin/dashboard"))
+               .andExpect(status().isOk());
+    }
+    
+    // Test with a mocked standard user accessing admin endpoint
+    @Test
+    @WithMockUser(username = "standardUser", roles = {"USER"})
+    void whenAuthenticatedAsUser_thenForbidden() throws Exception {
+        mockMvc.perform(get("/api/admin/dashboard"))
+               .andExpect(status().isForbidden());
+    }
+
+    // Test with a real UserDetails loaded from the UserDetailsService
+    @Test
+    @WithUserDetails("real.admin@example.com")
+    void whenAuthenticatedWithRealUserDetails_thenSuccess() throws Exception {
+        mockMvc.perform(get("/api/admin/dashboard"))
+               .andExpect(status().isOk());
     }
 }
 ```
