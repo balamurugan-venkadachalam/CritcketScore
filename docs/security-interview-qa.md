@@ -867,22 +867,72 @@ public class CustomCsrfTokenRepository implements CsrfTokenRepository {
 }
 
 // Frontend integration (JavaScript)
-// Fetch CSRF token and include in requests
-fetch('/csrf-token')
-    .then(response => response.json())
-    .then(data => {
-        const csrfToken = data.token;
-        
-        // Include in POST request
-        fetch('/api/data', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': csrfToken
-            },
-            body: JSON.stringify(payload)
-        });
+// ── STEP 1: Fetch and store token on app load ─────────────────────
+
+fetch('/csrf-token')                    // GET — no CSRF needed (safe method)
+  .then(res => res.json())
+  .then(data => {
+
+    const csrfToken = data.token        // "abc-123-xyz"
+    //    stored in memory — NOT localStorage (XSS risk)
+
+    // ── STEP 2: Attach token to every mutating request ───────────
+
+    fetch('/api/data', {
+      method: 'POST',                   // mutating — CSRF check triggered
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': csrfToken       // 👈 must match what backend stored
+      },
+      body: JSON.stringify(payload)
     });
+  });
+```
+
+---
+
+### CookieCsrfTokenRepository flow (alternative to custom)
+```text
+Browser                        Backend
+   │                              │
+   │  GET /any-page               │
+   │─────────────────────────────>│
+   │                              │
+   │                              │ generate token
+   │                              │ set cookie:
+   │                              │ XSRF-TOKEN=abc-123
+   │                              │ HttpOnly=false  ← JS can read it
+   │  Set-Cookie: XSRF-TOKEN=abc  │
+   │<─────────────────────────────│
+   │                              │
+   │ JS reads cookie:             │
+   │ document.cookie              │
+   │ → "XSRF-TOKEN=abc-123"       │
+   │                              │
+   │  POST /api/data              │
+   │  Cookie: XSRF-TOKEN=abc-123  │ ← browser sends automatically
+   │  X-XSRF-TOKEN: abc-123       │ ← JS also puts it in header
+   │─────────────────────────────>│
+   │                              │
+   │                              │ cookie value == header value?
+   │                              │ ✅ match → allow
+   │  200 OK                      │
+   │<─────────────────────────────│
+```
+
+> Evil site can't do this — it can **send** your cookie but **cannot read** it due to Same-Origin Policy. So it can never put the right value in the header.
+
+---
+
+### When to enable vs disable CSRF
+```text
+Browser-based app (HTML forms, React, Angular)
+   └── ✅ ENABLE CSRF — sessions + cookies used
+
+Mobile app / Postman / Server-to-Server
+   └── ❌ DISABLE CSRF — JWT stateless, no cookies
+       .csrf(csrf -> csrf.disable())
+       .sessionManagement(s -> s.sessionCreationPolicy(STATELESS))
 ```
 
 ### 8. Explain password encoding and best practices in Spring Security
