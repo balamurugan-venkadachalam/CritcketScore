@@ -35,22 +35,52 @@ The `score-dashboard` will be a new Spring Boot subproject responsible for servi
 
 ## 2. How Data is Loaded into Elasticsearch
 
-**Recommendation: Do NOT write to Elasticsearch directly from the Kafka `score-consumer`.** 
-Writing to two databases simultaneously (DynamoDB and Elasticsearch) introduces the "Dual Write Problem" (if DynamoDB succeeds but Elasticsearch fails, your search is out of sync). 
+When adding a secondary data store like Elasticsearch alongside a primary database like DynamoDB, you must choose a sync strategy. Here are the three main architectural options, along with their pros, cons, and a final conclusion.
 
-Instead, use one of the following asynchronous replication strategies:
-
-### Option A: DynamoDB Streams + AWS Lambda (Recommended)
+### Option A: Change Data Capture (CDC) via DynamoDB Streams + AWS Lambda
 1. The `score-consumer` consumes the Kafka message and writes it *only* to DynamoDB.
-2. DynamoDB Streams captures the insert/update event.
-3. An AWS Lambda function is triggered by the stream.
+2. DynamoDB Streams captures the insert/modify/remove event.
+3. An AWS Lambda function is triggered automatically by the stream.
 4. The Lambda function transforms the DynamoDB record into an Elasticsearch document and indexes it into OpenSearch.
-**Pros:** Guarantees DynamoDB is the absolute source of truth. Highly scalable and decoupled.
 
-### Option B: Kafka Sink Connector (Alternative)
-1. Run a Kafka Connect OpenSearch Sink Connector directly attached to MSK.
-2. The connector reads the exact same topic the `score-consumer` reads and indexes data directly into OpenSearch.
-**Pros:** Zero-code syncing. **Cons:** Requires running Kafka Connect infrastructure.
+**Pros:**
+*   **Single Source of Truth:** DynamoDB is the absolute authority. The search index is guaranteed to eventually match the DB state.
+*   **Decoupled & Resilient:** If OpenSearch goes down, the Lambda fails and retries via the stream iterator without impacting the main Kafka consumer workflow.
+*   **No Code Changes to Consumer:** The `score-consumer` remains purely concerned with DynamoDB.
+
+**Cons:**
+*   **Slight Latency:** There is a minor delay (usually < 1 second) between the DB write and the search index update.
+*   **AWS Lock-in / Cost:** Requires configuring and paying for DynamoDB Streams and Lambda invocations.
+
+### Option B: Kafka Sink Connector (Kafka Connect)
+1. You run a Kafka Connect cluster equipped with the OpenSearch Sink Connector.
+2. The connector subscribes to the exact same MSK topic that the `score-consumer` is reading from.
+3. As messages arrive, the connector sink pushes them directly into OpenSearch in parallel to the consumer writing to DynamoDB.
+
+**Pros:**
+*   **Zero Code:** No custom Lambda or consumer code is required for the sync; it's purely configuration-driven.
+*   **Speed:** Elasticsearch and DynamoDB are updated in parallel.
+
+**Cons:**
+*   **Operational Overhead:** You must provision, monitor, and maintain a Kafka Connect cluster (or use MSK Connect which incurs infrastructure costs).
+*   **Divergence Risk:** If the Kafka message structure doesn't perfectly match the desired Elasticsearch document structure, you still need to write custom Single Message Transforms (SMTs), negating the "zero code" benefit.
+
+### Option C: "Dual Writes" from the Spring Boot Consumer
+1. The `score-consumer` receives a Kafka message.
+2. The Java code calls `dynamoDbTemplate.save()`.
+3. Immediately after, the same Java code calls `elasticsearchOperations.save()`.
+
+**Pros:**
+*   **Simplicity at First Glance:** Conceptually easy to understand and all logic is in one codebase.
+
+**Cons:**
+*   **The Dual Write Problem:** This is a known distributed systems anti-pattern. If the DynamoDB write succeeds but the OpenSearch API call times out or fails, your systems are out of sync. You must implement complex saga patterns, retry queues (DLQs), or two-phase commits to handle partial failures.
+*   **Coupling:** The consumer is now tied to the availability of *both* databases to make progress.
+
+### Final Conclusion & Recommendation
+**Option A (DynamoDB Streams + Lambda)** is the definitive choice for this architecture. 
+
+It completely avoids the Dual Write problem (Option C) and removes the heavy infrastructure tax of running Kafka Connect (Option B). Even though it introduces a few hundred milliseconds of eventual consistency, this is perfectly acceptable for a dashboard search feature. Most importantly, it keeps the `score-consumer` extremely fast and focused solely on processing Kafka messages into the source-of-truth database.
 
 ---
 
