@@ -1,0 +1,17 @@
+spring:
+  # Elasticsearch Local Connect
+  elasticsearch:
+    uris: http://localhost:9200
+  
+  # Redis Local Connect
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+logging:
+  level:
+    root: INFO
+    com.crickscore: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.data.elasticsearch: DEBUG

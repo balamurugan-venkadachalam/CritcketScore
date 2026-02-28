@@ -5,32 +5,38 @@ plugins {
 
 // Lombok 1.18.38 is the first release with Java 24 support (released 2025-03-31).
 ext['lombok.version'] = '1.18.38'
+ext['jjwt.version'] = '0.12.5'
 
 dependencies {
     // ─── Spring Boot Starters ─────────────────────────────────────────────────
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    
+    // ─── Security & JWT ───────────────────────────────────────────────────────
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation "io.jsonwebtoken:jjwt-api:0.12.5"
+    runtimeOnly "io.jsonwebtoken:jjwt-impl:0.12.5"
+    runtimeOnly "io.jsonwebtoken:jjwt-jackson:0.12.5"
 
-    // ─── Kafka ────────────────────────────────────────────────────────────────
-    implementation 'org.springframework.kafka:spring-kafka'
+    // ─── Search & Caching ─────────────────────────────────────────────────────
+    implementation 'org.springframework.boot:spring-boot-starter-data-elasticsearch'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.springframework.boot:spring-boot-starter-cache'
 
     // ─── AWS SDK v2 ───────────────────────────────────────────────────────────
     implementation 'software.amazon.awssdk:dynamodb'
     implementation 'software.amazon.awssdk:dynamodb-enhanced'
     implementation 'software.amazon.awssdk:secretsmanager'
-    implementation 'software.amazon.awssdk:sns'
     implementation 'software.amazon.awssdk:sts'
     implementation 'software.amazon.awssdk:auth'
 
-    // ─── Observability: Metrics ───────────────────────────────────────────────
+    // ─── Observability: Metrics & Tracing ─────────────────────────────────────
     implementation 'io.micrometer:micrometer-registry-prometheus'
-
-    // ─── Observability: Tracing (OpenTelemetry via Micrometer bridge) ─────────
     implementation 'io.micrometer:micrometer-tracing-bridge-otel'
     implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
 
-    // ─── Serialization ───────────────────────────────────────────────────────
+    // ─── Serialization ────────────────────────────────────────────────────────
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
     implementation 'com.fasterxml.jackson.module:jackson-module-parameter-names'
@@ -38,21 +44,21 @@ dependencies {
     // ─── Logging: JSON / Logstash encoder ─────────────────────────────────────
     implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
 
-    // ─── Lombok (pinned to 1.18.36 for Java 24 support) ──────────────────────
+    // ─── Lombok (pinned to 1.18.38 for Java 24 support) ────────────────────────
     compileOnly      'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
 
     // ─── Test ─────────────────────────────────────────────────────────────────
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testImplementation 'org.springframework.security:spring-security-test'
     testCompileOnly      'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
 }
 
 springBoot {
-    mainClass = 'com.crickscore.consumer.T20ScoreConsumerApplication'
+    mainClass = 'com.crickscore.dashboard.ScoreDashboardApplication'
 }
 
 bootJar {
-    archiveFileName = 'score-consumer.jar'
+    archiveFileName = 'score-dashboard.jar'
 }

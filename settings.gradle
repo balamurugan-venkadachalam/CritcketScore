@@ -1,4 +1,5 @@
 rootProject.name = 'crickscore'
 
-include 't20-score-producer'
-include 't20-score-consumer'
+include 'score-producer'
+include 'score-consumer'
+include 'score-dashboard'

@@ -51,7 +51,11 @@ public class SecurityConfig {
 ### 2. Explain the Spring Security architecture and filter chain
 
 **Answer:**
-Spring Security uses a chain of filters to process security concerns.
+Spring Security uses a chain of filters to process security concerns. 
+
+👉 **Interactive Diagram:** [View Spring Security Architecture Diagram](spring-security-diagram.html)
+*(You can also view the embedded diagram below if your markdown viewer supports it)*
+<iframe src="spring-security-diagram.html" width="100%" height="600px" style="border:1px solid #ccc; border-radius: 8px;"></iframe>
 
 **Key Components:**
 

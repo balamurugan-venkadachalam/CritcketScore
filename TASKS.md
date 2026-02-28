@@ -30,7 +30,10 @@
 | TASK-13 | Consumer Application – Replay API | 🔲 | P1 | TASK-11 |
 | TASK-14 | Consumer Application – Observability | 🔲 | P1 | TASK-13 |
 | TASK-15 | Integration Testing | 🔲 | P1 | TASK-08, TASK-14 |
-| TASK-16 | Documentation | 🔲 | P2 | TASK-15 |
+| TASK-16 | Dashboard API – Core Setup & Security | ✅ | P0 | TASK-01 |
+| TASK-17 | Dashboard API – Search & Caching | 🔲 | P1 | TASK-16 |
+| TASK-18 | CDC Pipeline – DynamoDB to Elasticsearch | 🔲 | P1 | TASK-11 |
+| TASK-19 | Documentation | 🔲 | P2 | TASK-15 |
 
 ---
 
@@ -428,7 +431,71 @@
 
 ---
 
-## TASK-16: Documentation
+## TASK-16: Dashboard API – Core Setup & Security
+**Status:** ✅ Done  
+**Priority:** P0  
+**Description:** Set up the Spring Boot subproject for the dashboard, configuring dependencies, basic API endpoints, and Spring Security with stateless JWT validation.  
+**Depends on:** TASK-01
+
+### Subtasks
+
+| Sub ID | Description | Status |
+|--------|-------------|--------|
+| TASK-16.1 | `build.gradle` – Configure dependencies: web, actuator, security, jjwt, data-redis, data-elasticsearch | ✅ |
+| TASK-16.2 | `application.yml` – Set port 8083, Redis TTL defaults, mapping for Elasticsearch, JWT secret configs | ✅ |
+| TASK-16.3 | JWT Utilities – Implement `JwtUtil.java` and `JwtAuthFilter.java` to parse and validate Bearer tokens | ✅ |
+| TASK-16.4 | `SecurityConfig.java` – Implement stateless security layer, locking down `/api/dashboard/**` and permitting `/api/auth/login` | ✅ |
+
+### Acceptance Criteria
+- Service starts on port 8083 without clashing with producer/consumer.
+- Unauthenticated requests to `/api/dashboard/**` return 401/403.
+- `AuthController` successfully returns JWT token upon login.
+
+---
+
+## TASK-17: Dashboard API – Search & Caching
+**Status:** 🔲 Pending  
+**Priority:** P1  
+**Description:** Implement robust endpoints relying on Redis caching and Elasticsearch query logic for searching matches and players.  
+**Depends on:** TASK-16
+
+### Subtasks
+
+| Sub ID | Description | Status |
+|--------|-------------|--------|
+| TASK-17.1 | `RedisCacheConfig.java` – Configure custom TTLs for `@Cacheable("live-scores")` | 🔲 |
+| TASK-17.2 | `MatchSearchRepository.java` – Integrate Spring Data Elasticsearch for fuzzy searching match titles and venues | 🔲 |
+| TASK-17.3 | Player Stats Aggregation – Implement Elasticsearch nested bucket script query for temporal stats ("Last 1 Year") via `NativeSearchQuery` | 🔲 |
+| TASK-17.4 | Integration Tests – Verify controllers properly retrieve from Redis vs Elasticsearch | 🔲 |
+
+### Acceptance Criteria
+- `GET /api/dashboard/matches/live` is cached in Redis for configured TTL.
+- Complex nested Elasticsearch aggregations return correct calculated Strike Rates.
+
+---
+
+## TASK-18: CDC Pipeline – DynamoDB to Elasticsearch
+**Status:** 🔲 Pending  
+**Priority:** P1  
+**Description:** Build the asynchronous Change Data Capture (CDC) pipeline to replicate data from DynamoDB Streams to OpenSearch without dual-writes in the consumer.  
+**Depends on:** TASK-11
+
+### Subtasks
+
+| Sub ID | Description | Status |
+|--------|-------------|--------|
+| TASK-18.1 | Enable DynamoDB Streams explicitly for `t20-score-events` table in `cdk-infra` | 🔲 |
+| TASK-18.2 | Write AWS Lambda function (NodeJS or Java) to consume stream events and transform to OpenSearch document format | 🔲 |
+| TASK-18.3 | Deploy Lambda via CDK and attach DynamoDB Stream trigger | 🔲 |
+| TASK-18.4 | Handle partial failures in Lambda using SQS Dead Letter Queue (DLQ) | 🔲 |
+
+### Acceptance Criteria
+- When `score-consumer` writes to DynamoDB, records automatically index into OpenSearch within seconds.
+- Consumer code (Java) undergoes zero modifications for this replication logic.
+
+---
+
+## TASK-19: Documentation
 **Status:** 🔲 Pending  
 **Priority:** P2  
 **Description:** Complete all project documentation.  
@@ -453,14 +520,14 @@
 
 ## 📊 Progress Summary
 
-**Total Tasks:** 17  
-**Total Subtasks:** 102  
+**Total Tasks:** 20  
+**Total Subtasks:** 114  
 
 | Status | Tasks | Subtasks |
 |--------|-------|----------|
-| ✅ Done | 6 | 47 |
+| ✅ Done | 7 | 51 |
 | 🔄 In Progress | 0 | 0 |
-| 🔲 Pending | 11 | 55 |
+| 🔲 Pending | 13 | 63 |
 | 🚫 Blocked | 0 | 0 |
 
 ---
@@ -485,8 +552,11 @@ TASK-01 (Scaffold)
                     │               └── TASK-14 (Consumer Observability)
                     └── TASK-12 (Retry & DLQ)
                             └── TASK-14 (Consumer Observability)
+    └── TASK-16 (Dashboard Setup) ✅
+            └── TASK-17 (Dashboard Search & Cache)
 
-TASK-08 + TASK-14 → TASK-15 (Integration Testing) → TASK-16 (Documentation)
+TASK-11 (Consumer DynamoDB) → TASK-18 (CDC DynamoDB to Elasticsearch)
+TASK-08 + TASK-14 → TASK-15 (Integration Testing) → TASK-19 (Documentation)
 TASK-00 feeds into TASK-15 (local stack used by integration tests)
 ```
 

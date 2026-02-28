@@ -3,6 +3,11 @@
 ## Overview
 The `score-dashboard` will be a new Spring Boot subproject responsible for serving frontend clients (web/mobile). It provides secure API endpoints for searching matches, fetching live scoreboards, and retrieving player statistics. It relies heavily on **Amazon OpenSearch (Elasticsearch)** for fast, fuzzy, and aggregated queries, and **Redis** for caching high-traffic data.
 
+### Implementation Progress (Ref: `TASKS.md`)
+- [x] **TASK-16**: Dashboard API – Core Setup & Security
+- [ ] **TASK-17**: Dashboard API – Search & Caching
+- [ ] **TASK-18**: CDC Pipeline – DynamoDB to Elasticsearch
+
 ---
 
 ## 1. High-Level Architecture

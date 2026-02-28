@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: score-dashboard
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  
+  # Caching Config
+  cache:
+    type: redis
+    redis:
+      time-to-live: 60000 # Default TTL 60s
+  
+  data:
+    redis:
+      timeout: 2000ms
+      connect-timeout: 2000ms
+
+server:
+  port: 8083 # Dashboard API runs on 8083 (producer 8081, consumer 8082)
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info,metrics,loggers
+  metrics:
+    distribution:
+      slo:
+        http.server.requests: 250ms, 500ms, 1s 
+
+# Custom JWT Config
+app:
+  jwt:
+    secret: ${JWT_SECRET:super-secret-key-that-must-be-very-long-and-secure-in-production}
+    expiration-ms: 86400000 # 24 hours
