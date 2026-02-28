@@ -1,0 +1,44 @@
+# ─── LOCAL PROFILE ──────────────────────────────────────────────────────────
+# Targets the Docker Compose local stack defined in /docker-compose.yml.
+#
+# Kafka:        Confluent single broker on localhost:9092 (plain text, no auth)
+# DynamoDB:     LocalStack on http://localhost:4566
+# Secrets Mgr:  LocalStack on http://localhost:4566
+#
+# Start the stack first: make up
+# Run the consumer:      ./gradlew :t20-score-consumer:bootRun
+
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: t20-score-consumer-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer:   org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.records: 50
+        fetch.min.bytes: 512          # Lower threshold locally for faster test feedback
+        isolation.level: read_committed
+    admin:
+      auto-create: true              # Allow admin to query topic metadata; topics created by producer
+
+# ── AWS SDK v2 pointing to LocalStack ─────────────────────────────────────────
+aws:
+  region: ap-southeast-2
+  dynamodb:
+    endpoint-override: http://localhost:4566
+  secretsmanager:
+    secret-name: t20/consumer/config
+    endpoint-override: http://localhost:4566
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level:
+    root: INFO
+    com.crickscore: DEBUG
+    org.apache.kafka.clients.consumer: INFO
+    org.apache.kafka.clients.admin: INFO
+    org.springframework.kafka: INFO
+    software.amazon.awssdk: WARN

@@ -1,0 +1,56 @@
+# ─── PRODUCTION PROFILE ─────────────────────────────────────────────────────
+# Targets AWS MSK (consumer) and DynamoDB (writer) with TLS + SASL/IAM.
+# All sensitive values are injected via environment variables.
+
+spring:
+  kafka:
+    bootstrap-servers: ${MSK_BOOTSTRAP_SERVERS}
+    consumer:
+      group-id: t20-score-consumer-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false      # AckMode.RECORD — manual, post-DynamoDB-write
+      properties:
+        max.poll.records: 50
+        fetch.min.bytes: 1024
+        fetch.max.wait.ms: 500
+        isolation.level: read_committed
+        # SASL/IAM auth for MSK
+        security.protocol: SASL_SSL
+        sasl.mechanism: AWS_MSK_IAM
+        sasl.jaas.config: software.amazon.msk.auth.iam.IAMLoginModule required;
+        sasl.client.callback.handler.class: software.amazon.msk.auth.iam.IAMClientCallbackHandler
+        ssl.truststore.location: /etc/ssl/certs/kafka.client.truststore.jks
+        ssl.truststore.type: JKS
+        # Cooperative rebalancing — minimises partition assignment disruption on rolling deploys
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        # Static membership — avoids rebalance if consumer restarts within session timeout (Fargate rolling update)
+        group.instance.id: ${HOSTNAME}-${POD_NAME:consumer}
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 15000
+    admin:
+      auto-create: false             # Topics pre-provisioned by CDK in prod
+
+# ── AWS settings ──────────────────────────────────────────────────────────────
+aws:
+  region: ${AWS_REGION:ap-southeast-2}
+  secretsmanager:
+    secret-name: ${SECRETS_NAME:t20/consumer/config}
+  # DynamoDB uses regional endpoint — no endpoint-override in prod
+  dynamodb:
+    endpoint-override: ""            # Empty = use regional endpoint
+
+# ── OpenTelemetry ─────────────────────────────────────────────────────────────
+management:
+  otlp:
+    metrics:
+      export:
+        url: ${OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 30s
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level:
+    root: INFO
+    com.crickscore: INFO
+    org.apache.kafka: WARN
+    software.amazon.awssdk: WARN
