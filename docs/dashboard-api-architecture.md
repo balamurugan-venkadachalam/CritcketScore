@@ -122,11 +122,129 @@ To handle massive spikes in traffic (e.g., during the final overs of a match), t
 
 ### Statistics & Aggregations (Powered by Elasticsearch)
 *   `GET /api/dashboard/stats/players/{playerId}` → Player career stats.
+*   `GET /api/dashboard/stats/players/{playerId}?timeframe=last_year` → Player stats filtered by time.
 *   `POST /api/dashboard/analytics/matches` → Aggregations (e.g., match wins by venue, average scores by format).
 
 ---
 
-## 5. Technology Stack for the Subproject
+## 5. Querying Time-Bound Player Performance (e.g., "Last 1 Year")
+
+To get a player's performance (runs, strike rate, wickets, catches) specifically for the last 1 year, you shouldn't rely on the pre-calculated `careerStats` in the `Player Index`. Instead, you use the **Match Index** where the raw performance data lives inside the nested `players` array.
+
+### The Elasticsearch Approach
+You run an aggregation query against the `matches` index with a top-level date filter, and then calculate sums inside the nested `players` block.
+
+**Query Logic:**
+1.  **Filter (Outer Level):** Match Date >= `now-1y/d` (last 1 year).
+2.  **Filter (Nested Level):** `players.playerId` == `TARGET_PLAYER_ID`.
+3.  **Aggregations (Nested Level):** `sum` of runs, `sum` of balls faced, `sum` of wickets, `sum` of catches.
+4.  **Pipeline Aggregation:** Calculate Strike Rate = `(sum_runs / sum_balls) * 100`.
+
+### Example OpenSearch JSON Query
+```json
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "range": {
+            "startDate": {
+              "gte": "now-1y/d",
+              "lte": "now/d"
+            }
+          }
+        },
+        {
+          "nested": {
+            "path": "players",
+            "query": {
+              "term": {
+                "players.playerId": "V_KOHLI_18"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "aggs": {
+    "player_stats": {
+      "nested": {
+        "path": "players"
+      },
+      "aggs": {
+        "filtered_player": {
+          "filter": {
+            "term": {
+              "players.playerId": "V_KOHLI_18"
+            }
+          },
+          "aggs": {
+            "total_runs": { "sum": { "field": "players.runs" } },
+            "total_balls": { "sum": { "field": "players.ballsFaced" } },
+            "total_wickets": { "sum": { "field": "players.wickets" } },
+            "total_catches": { "sum": { "field": "players.catches" } },
+            "matches_played": { "value_count": { "field": "players.playerId" } },
+            "strike_rate": {
+              "bucket_script": {
+                "buckets_path": {
+                  "runs": "total_runs",
+                  "balls": "total_balls"
+                },
+                "script": "(params.balls > 0) ? (params.runs / params.balls) * 100 : 0"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Spring Data Elasticsearch Implementation
+In Spring Boot, you build this using `NativeSearchQuery` and `AggregationBuilders`:
+
+```java
+import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.search.aggregations.AggregationBuilders;
+import org.elasticsearch.search.aggregations.pipeline.PipelineAggregatorBuilders;
+
+public PlayerStats getPlayerStatsLastYear(String playerId) {
+    // 1. Filter by last year & nested playerId
+    BoolQueryBuilder query = QueryBuilders.boolQuery()
+        .must(QueryBuilders.rangeQuery("startDate").gte("now-1y/d").lte("now/d"))
+        .must(QueryBuilders.nestedQuery("players", 
+              QueryBuilders.termQuery("players.playerId", playerId), ScoreMode.None));
+
+    // 2. Build Nested Aggregation and Pipeline Math
+    NativeSearchQuery searchQuery = new NativeSearchQueryBuilder()
+        .withQuery(query)
+        .addAggregation(AggregationBuilders.nested("player_stats", "players")
+            .subAggregation(AggregationBuilders.filter("filtered_player", 
+                QueryBuilders.termQuery("players.playerId", playerId))
+                .subAggregation(AggregationBuilders.sum("total_runs").field("players.runs"))
+                .subAggregation(AggregationBuilders.sum("total_balls").field("players.ballsFaced"))
+                .subAggregation(AggregationBuilders.sum("total_wickets").field("players.wickets"))
+                .subAggregation(AggregationBuilders.sum("total_catches").field("players.catches"))
+                // Execute math (Runs/Balls * 100) inside ES to save network I/O
+                .subAggregation(PipelineAggregatorBuilders.bucketScript("strike_rate", 
+                    Map.of("runs", "total_runs", "balls", "total_balls"),
+                    new Script("(params.balls > 0) ? (params.runs / params.balls) * 100 : 0"))
+                )
+            )
+        )
+        .build();
+
+    // 3. Execute and parse results...
+}
+```
+**Why this is powerful:** We don't need a background job updating "Last 1 Year" stats every day. Elasticsearch computes it on the fly in milliseconds directly from the match history.
+
+---
+
+## 6. Technology Stack for the Subproject
 *   **Framework:** Spring Boot 3.4.2
 *   **Web:** `spring-boot-starter-web`
 *   **Security:** `spring-boot-starter-security`, `java-jwt` (or `jjwt` for token generation/validation)
