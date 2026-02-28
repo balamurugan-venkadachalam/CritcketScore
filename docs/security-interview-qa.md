@@ -1537,3 +1537,94 @@ class SecurityTest {
     }
 }
 ```
+
+### 15. How do you configure and handle multiple Authentication Providers in Spring Security?
+
+**Answer:**
+In many enterprise applications, you need to support multiple authentication methods simultaneously (e.g., standard Database/Username-Password authentication alongside LDAP, Active Directory, or custom token-based authentication). 
+
+Spring Security handles this gracefully using the **`ProviderManager`** (the default implementation of `AuthenticationManager`). The `ProviderManager` maintains a `List<AuthenticationProvider>`.
+
+**How it works:**
+1. When an `Authentication` request is made, `ProviderManager` iterates through its list of configured `AuthenticationProvider`s.
+2. It calls the **`supports(Class<?> authentication)`** method on each provider to check if it knows how to handle the specific type of `Authentication` token (e.g., `UsernamePasswordAuthenticationToken` vs `JwtAuthenticationToken`).
+3. If a provider supports it, its `authenticate()` method is called.
+4. If authentication succeeds, a fully populated `Authentication` object is returned and the loop stops.
+5. If authentication fails, normal `AuthenticationException`s (like `BadCredentialsException`) are swallowed, and the manager simply moves on to try the next provider in the chain. Only if *all* providers fail is the exception finally thrown back to the user.
+
+**Configuration Example:**
+
+```java
+@Configuration
+@EnableWebSecurity
+public class MultiProviderSecurityConfig {
+
+    private final CustomUserDetailsService userDetailsService;
+    private final CustomJwtAuthenticationProvider jwtProvider; // Your custom provider
+
+    public MultiProviderSecurityConfig(CustomUserDetailsService userDetailsService, 
+                                       CustomJwtAuthenticationProvider jwtProvider) {
+        this.userDetailsService = userDetailsService;
+        this.jwtProvider = jwtProvider;
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+            // Configure custom AuthenticationManager to use both providers
+            .authenticationManager(authenticationManager())
+            .formLogin(Customizer.withDefaults()); // Just an example
+            
+        return http.build();
+    }
+
+    /**
+     * Define the AuthenticationManager and inject our list of multiple providers.
+     */
+    @Bean
+    public AuthenticationManager authenticationManager() {
+        return new ProviderManager(Arrays.asList(
+            daoAuthenticationProvider(), // Provider 1: Database Auth
+            jwtProvider                  // Provider 2: Custom Token Auth
+        ));
+    }
+
+    /**
+     * Provider 1: Standard Username/Password Database Authentication
+     */
+    @Bean
+    public DaoAuthenticationProvider daoAuthenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(userDetailsService);
+        provider.setPasswordEncoder(passwordEncoder());
+        return provider;
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+
+**Custom Provider `supports` implementation:**
+Every custom provider must properly implement `supports` so the `ProviderManager` knows when to invoke it!
+
+```java
+@Component
+public class CustomJwtAuthenticationProvider implements AuthenticationProvider {
+
+    @Override
+    public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+        // ... logic to validate the JWT ...
+        return new JwtAuthenticationToken(userDetails, token, authorities);
+    }
+
+    @Override
+    public boolean supports(Class<?> authentication) {
+        // Only return true if the token is exactly of type JwtAuthenticationToken
+        return JwtAuthenticationToken.class.isAssignableFrom(authentication);
+    }
+}
+```
