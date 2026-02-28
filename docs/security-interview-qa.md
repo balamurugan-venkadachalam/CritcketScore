@@ -1628,3 +1628,75 @@ public class CustomJwtAuthenticationProvider implements AuthenticationProvider {
     }
 }
 ```
+
+---
+
+## Spring Security Best Practices
+
+### 16. What are the key best practices when implementing Spring Security in a production application?
+
+**Answer:**
+When deploying applications with Spring Security, you should follow these essential guidelines to ensure maximum protection:
+
+1. **Never Store Plaintext Passwords**
+   - Always use a strong, adaptive one-way hashing algorithm like bcrypt, scrypt, or Argon2.
+   - Example: `PasswordEncoderFactories.createDelegatingPasswordEncoder()` (which uses bcrypt by default in modern Spring).
+
+2. **Implement Principle of Least Privilege**
+   - Users and services should only be granted the minimum permissions necessary to perform their tasks.
+   - Use strict `hasRole()` and `hasAuthority()` rules on endpoints, and employ method-level security (`@PreAuthorize`) when securing service business logic, not just web layers.
+
+3. **Secure Your Cookies and Tokens**
+   - **Cookies:** Always set `HttpOnly` and `Secure` flags on Session IDs or JWTs stored in cookies to prevent XSS JavaScript access and ensure they transmit only via HTTPS.
+   - **Tokens (JWT):** Keep token expiration times short (e.g., 15-30 minutes). Use Refresh tokens with longer lifespans that can be revoked if compromised.
+
+4. **Enable CSRF Protection where applicable**
+   - If your application renders HTML directly or heavily relies on Session cookies, **CSRF protection must be left on** (it is ON by default).
+   - Only disable CSRF if the application is purely a stateless REST API (like a JWT-driven SPA or mobile backend).
+
+5. **Utilize Security Headers**
+   - Spring Security inserts a set of Default HTTP Security Headers (like `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Cache-Control`). Do not disable these.
+   - Define a strong `Content-Security-Policy` (CSP) header to drastically reduce the risk of Cross-Site Scripting (XSS).
+
+6. **Log Security Events Appropriately**
+   - Audit and log successful logins, failed attempts, and authorization denials.
+   - Ensure you never log sensitive data such as raw passwords, tokens, or PII (Personally Identifiable Information).
+
+---
+
+## Common Pitfalls & Developer Mistakes
+
+### 17. What are the most common mistakes developers make when configuring Spring Security?
+
+**Answer:**
+Below are frequent pitfalls that introduce vulnerabilities during development:
+
+1. **Mistakenly Disabling CSRF on Web Apps**
+   - **Mistake:** Developers often use `.csrf(AbstractHttpConfigurer::disable)` merely because "POST requests are blocking" during testing, without understanding the implications.
+   - **Consequence:** If the app uses cookie-based authentication, an attacker can trick the user into executing unwanted actions (e.g., bank transfers).
+   - **Fix:** Keep CSRF enabled for stateful web apps.
+
+2. **Mixing up Roles and Authorities**
+   - **Mistake:** Confusing `hasAuthority("ADMIN")` with `hasRole("ADMIN")`.
+   - **Consequence:** Spring assumes Roles have a standard `ROLE_` prefix. If you check for `hasRole("ADMIN")`, Spring actually looks for the authority `ROLE_ADMIN`. If your DB just stores `ADMIN`, authorization will mysteriously fail.
+   - **Fix:** Be consistent. If checking `hasRole("ADMIN")`, ensure the GrantedAuthority string is `ROLE_ADMIN`. If checking exact strings, use `hasAuthority("ADMIN")`.
+
+3. **Incorrect Filter Order in SecurityFilterChain**
+   - **Mistake:** Adding a custom JWT filter *after* the `UsernamePasswordAuthenticationFilter` or throwing it into random positions.
+   - **Consequence:** Spring won't have the context populated when other filters need it, leading to 401s or bypassed security checks.
+   - **Fix:** Explicitly define `.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)`.
+
+4. **Re-inventing the Password Hash Engine**
+   - **Mistake:** Writing custom hashing logic (like raw MD5 or SHA-256 with static salts) instead of relying on Spring's provided `PasswordEncoder`.
+   - **Consequence:** High vulnerability to rainbow table and brute force attacks.
+   - **Fix:** Always use the `BCryptPasswordEncoder` or `DelegatingPasswordEncoder`.
+
+5. **Exposing the `/actuator` Endpoints**
+   - **Mistake:** Permitting all access to `/actuator/**` because it makes internal health checks "easier".
+   - **Consequence:** Actuators expose environment variables (`/env`), internal beans, and heap dumps (`/heapdump`), giving attackers massive insight or direct access to secrets.
+   - **Fix:** Lock down actuators and only permit `/actuator/health` broadly if necessary.
+
+6. **Storing State in Stateless Applications**
+   - **Mistake:** Setting `SessionCreationPolicy.STATELESS` but accidentally relying on `HttpSession` within a custom Controller or filter downstream.
+   - **Consequence:** Application behaves unpredictably, leading to memory leaks or users getting swapped security contexts under high concurrency.
+   - **Fix:** Rely purely on `SecurityContextHolder` populated per request lifecycle.
