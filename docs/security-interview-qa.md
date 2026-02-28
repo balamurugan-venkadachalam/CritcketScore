@@ -1700,3 +1700,53 @@ Below are frequent pitfalls that introduce vulnerabilities during development:
    - **Mistake:** Setting `SessionCreationPolicy.STATELESS` but accidentally relying on `HttpSession` within a custom Controller or filter downstream.
    - **Consequence:** Application behaves unpredictably, leading to memory leaks or users getting swapped security contexts under high concurrency.
    - **Fix:** Rely purely on `SecurityContextHolder` populated per request lifecycle.
+
+---
+
+## Identity, OAuth2, and Single Sign-On
+
+### 18. Compare and contrast OAuth 2.0, OpenID Connect (OIDC), Identity Provider (IdP), and Single Sign-On (SSO).
+
+**Answer:**
+These terms are frequently conflated, but they represent distinct concepts in modern identity and access management. Here is how they relate to and differ from one another:
+
+![Authentication Concepts](auth-concepts.png)
+
+
+#### 1. Single Sign-On (SSO)
+- **What it is:** A user experience (UX) and architectural **concept**.
+- **Definition:** SSO allows a user to log in once with one set of credentials and access multiple independent applications or websites without being asked to log in again.
+- **Example:** Logging into Gmail, and then immediately having access to Google Drive and YouTube without re-entering your password.
+- **Key Takeaway:** SSO is the *end goal*. OAuth 2.0, OIDC, and SAML are the *protocols* used to achieve that goal.
+
+#### 2. Identity Provider (IdP)
+- **What it is:** A **service** or **system** that creates, maintains, and manages identity information.
+- **Definition:** An IdP acts as the central hub of truth for user authentication. It actually verifies who the user is (e.g., checks against a database or Active Directory) and issues "tokens" or "assertions" that other applications (Service Providers) consume.
+- **Example:** Okta, Auth0, Keycloak, AWS Cognito, Microsoft Entra ID (Azure AD), Google Workspace.
+- **Key Takeaway:** The IdP is the *server entity* doing the heavy lifting to authenticate the user. It uses protocols like OIDC or SAML to talk to your application.
+
+#### 3. OAuth 2.0
+- **What it is:** An **authorization protocol**.
+- **Definition:** OAuth 2.0 allows an application to obtain limited access to a user's data on another service, *without* exposing the user's password. **It is designed for delegation of authorization, NOT authentication.**
+- **Analogy:** Giving a valet key to a parking attendant. The key allows them to drive the car (authorization), but it doesn't prove *who* the attendant is (authentication), nor does it let them open the glove box.
+- **Tokens Issued:** Issues an **Access Token** (and optionally a Refresh Token).
+- **Example:** "Allow Website XYZ to read your contacts on Google." 
+
+#### 4. OpenID Connect (OIDC)
+- **What it is:** An **authentication protocol** built directly *on top of* OAuth 2.0.
+- **Definition:** While OAuth 2.0 handles *authorization* (accessing resources), OIDC adds *authentication* (verifying identity). OIDC specifies how the client can verify the identity of the user based on the authentication performed by an Authorization Server/IdP.
+- **Analogy:** The valet key (OAuth2) plus a standard ID badge (OIDC) showing the attendant's name and employee number.
+- **Tokens Issued:** Issues an **ID Token** (a signed JSON Web Token / JWT containing user profile data) *in addition* to the OAuth 2.0 Access Token.
+- **Example:** The "Log in with Google" or "Log in with Apple" button.
+
+### Summary Comparison Table
+
+| Concept | Category | Core Purpose | "The What" | Token / Artifact |
+|:---|:---|:---|:---|:---|
+| **SSO** | User Experience | Seamless access across apps | "I only want to log in once" | N/A (Concept) |
+| **IdP** | Service/System | Authenticate users and issue identity | "I am the central database of users" | Issues Tokens/Assertions |
+| **OAuth 2.0** | Protocol | **Authorization** (Delegated Access) | "App X can read my data on App Y" | Access Token |
+| **OIDC** | Protocol | **Authentication** (Identity Verification) | "App X knows exactly who I am" | ID Token + Access Token |
+
+#### How they all work together in the real world:
+Your company buys **Okta (The IdP)**. You want your employees to log into your custom Spring Boot app and your HR system without entering passwords twice (**The SSO Experience**). You configure Spring Security in your app to use **OIDC (The Protocol)**. When an employee visits your app, Spring redirects them to Okta. Okta verifies their password, uses **OAuth 2.0** flows under the hood to handle the redirect mechanics, and returns an **ID Token (OIDC)** proving who they are, along with an **Access Token (OAuth 2.0)** so your app can call downstream APIs on their behalf.
