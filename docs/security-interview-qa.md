@@ -53,9 +53,10 @@ public class SecurityConfig {
 **Answer:**
 Spring Security uses a chain of filters to process security concerns. 
 
-👉 **Interactive Diagram:** [View Spring Security Architecture Diagram](spring-security-diagram.html)
-*(You can also view the embedded diagram below if your markdown viewer supports it)*
-<iframe src="spring-security-diagram.html" width="100%" height="600px" style="border:1px solid #ccc; border-radius: 8px;"></iframe>
+👉 **Interactive Diagram:** [View full HTML interactive version](spring-security-diagram.html) 
+Below is the visual overview of the Spring Security Authentication Architecture:
+
+![Spring Security Architecture Diagram](spring-security-diagram.png)
 
 **Key Components:**
 
