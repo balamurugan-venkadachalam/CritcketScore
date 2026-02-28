@@ -638,6 +638,151 @@ spring:
               - read:user
 ```
 
+#### Why use 2 Filter Chains (OAuth2 Client vs. Resource Server)?
+
+They serve completely different purposes — one is a client (logs in via OAuth), the other is a resource server (validates tokens on API calls).
+
+**The Core Difference:**
+
+| OAuth2 Client Config | OAuth2 Resource Server Config |
+|----------------------|-------------------------------|
+| **"I need to LOGIN via Google/GitHub"** | **"I need to VERIFY a JWT on every API request"** |
+| Browser → Your App | Mobile/SPA → Your API |
+| Handles login flow | Handles token validation |
+| Gets access token | Checks access token |
+| Redirects user | Returns 401 if invalid |
+
+#### Sequence Diagram — OAuth2 Client Flow (Login)
+
+```text
+Browser          Your App              Google (IdP)         DB
+   │                │                      │                 │
+   │  GET /dashboard│                      │                 │
+   │───────────────>│                      │                 │
+   │                │ Not authenticated    │                 │
+   │                │ redirect to /login   │                 │
+   │<───────────────│                      │                 │
+   │                │                      │                 │
+   │ Click          │                      │                 │
+   │ "Login with    │                      │                 │
+   │  Google"       │                      │                 │
+   │───────────────>│                      │                 │
+   │                │ Redirect to Google   │                 │
+   │                │ with client_id,      │                 │
+   │                │ scope, redirect_uri  │                 │
+   │<───────────────│                      │                 │
+   │                │                      │                 │
+   │ Google login   │                      │                 │
+   │ page shown     │                      │                 │
+   │─────────────────────────────────────>│                 │
+   │                │                      │                 │
+   │ User logs in   │                      │                 │
+   │ & consents     │                      │                 │
+   │─────────────────────────────────────>│                 │
+   │                │                      │                 │
+   │                │  Auth Code           │                 │
+   │                │<─────────────────────│                 │
+   │                │                      │                 │
+   │                │  Exchange code for   │                 │
+   │                │  access+id token     │                 │
+   │                │─────────────────────>│                 │
+   │                │                      │                 │
+   │                │  tokens returned     │                 │
+   │                │<─────────────────────│                 │
+   │                │                      │                 │
+   │                │ CustomOAuth2UserService.loadUser()     │
+   │                │ calls /userinfo endpoint               │
+   │                │─────────────────────>│                 │
+   │                │  user attributes     │                 │
+   │                │<─────────────────────│                 │
+   │                │                      │                 │
+   │                │ processOAuth2User()  │                 │
+   │                │ find or create user  │                 │
+   │                │─────────────────────────────────────>│
+   │                │  User saved/updated  │                 │
+   │                │<─────────────────────────────────────│
+   │                │                      │                 │
+   │  Redirect to   │                      │                 │
+   │  /dashboard    │                      │                 │
+   │<───────────────│                      │                 │
+```
+
+#### Sequence Diagram — Resource Server Flow (API Call)
+
+```text
+Mobile/SPA        Your API              Auth Server (JWKS)
+   │                │                        │
+   │  POST /api/data│                        │
+   │  Authorization:│                        │
+   │  Bearer <JWT>  │                        │
+   │───────────────>│                        │
+   │                │                        │
+   │                │ JwtDecoder intercepts  │
+   │                │ Extract JWT from header│
+   │                │                        │
+   │                │ Fetch public keys      │
+   │                │ (cached after 1st call)│
+   │                │───────────────────────>│
+   │                │                        │
+   │                │ JWKS keys returned     │
+   │                │<───────────────────────│
+   │                │                        │
+   │                │ Validate JWT signature │
+   │                │ Check exp, iss, aud    │
+   │                │                        │
+   │                │ jwtAuthenticationConverter()
+   │                │ Read "roles" claim     │
+   │                │ Add "ROLE_" prefix     │
+   │                │ Build Authentication   │
+   │                │                        │
+   │                │ SecurityContext set    │
+   │                │                        │
+   │                │ @PreAuthorize checks   │
+   │                │ pass ✅               │
+   │                │                        │
+   │  200 OK        │                        │
+   │  + data        │                        │
+   │<───────────────│                        │
+   │                │                        │
+   │                │ ── if JWT invalid ──   │
+   │                │                        │
+   │  401           │                        │
+   │  Unauthorized  │                        │
+   │<───────────────│                        │
+```
+
+#### How Spring knows which filter chain to use
+
+Each chain has an implicit priority and matcher.
+
+```java
+// Chain 1 — Resource Server
+// Matches: requests with "Authorization: Bearer" header
+// Priority: higher (checked first)
+@Order(1)
+http.securityMatcher(request -> request.getHeader("Authorization") != null)
+    .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+
+// Chain 2 — OAuth2 Client  
+// Matches: browser-based requests to /login, /dashboard etc
+// Priority: lower (checked second)
+@Order(2)
+http.oauth2Login(oauth2 -> oauth2.loginPage("/login"));
+```
+
+```text
+Incoming Request
+      │
+      ▼
+Has "Authorization: Bearer xxx" header?
+      │
+      ├── YES ──> Resource Server Filter Chain
+      │           (validate JWT, no redirect)
+      │
+      └── NO ───> OAuth2 Client Filter Chain
+                  (redirect to login if needed)
+```
+
 ### 7. How do you handle CSRF protection in Spring Security?
 
 **Answer:**
