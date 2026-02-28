@@ -58,6 +58,8 @@ Below is the visual overview of the Spring Security Authentication Architecture:
 
 ![Spring Security Architecture Diagram](spring-security-diagram.png)
 
+![Spring Security Detailed Architecture Diagram](spring_security_architecture2.png)
+
 **Key Components:**
 
 ```java
@@ -1738,6 +1740,8 @@ These terms are frequently conflated, but they represent distinct concepts in mo
 - **Analogy:** The valet key (OAuth2) plus a standard ID badge (OIDC) showing the attendant's name and employee number.
 - **Tokens Issued:** Issues an **ID Token** (a signed JSON Web Token / JWT containing user profile data) *in addition* to the OAuth 2.0 Access Token.
 - **Example:** The "Log in with Google" or "Log in with Apple" button.
+
+![OAuth2 Valet Key Analogy](auth-analogy_1.png)
 
 ### Summary Comparison Table
 
