@@ -1646,6 +1646,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 **Answer:**
 CORS (Cross-Origin Resource Sharing) is a mechanism that allows a server to indicate any origins (domain, scheme, or port) other than its own from which a browser should permit loading resources. CSRF is an attack where a malicious site tricks a user's browser into performing an unwanted action on a trusted site where the user is authenticated. CORS relaxes the same-origin policy to enable cross-domain communication, while CSRF protection defends against abuse of existing authentication during cross-domain requests.
 
+![CORS vs CSRF](corsvscsrf.jpg)
+
 ```java
 // CORS Configuration
 @Configuration
