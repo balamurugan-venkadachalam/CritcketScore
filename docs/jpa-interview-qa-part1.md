@@ -44,10 +44,171 @@ public class Product {
 ```
 
 **When to use Hibernate-specific features:**
-- Advanced caching strategies
+- Advanced caching strategies (`@Cache`)
+- Partial/conditional updates (`@DynamicUpdate`)
 - Custom types
-- Performance optimizations
+- Performance optimizations (`@Formula`, `@BatchSize`)
 - Legacy database support
+
+---
+
+#### Deep Dive: @Cache and @DynamicUpdate
+
+##### 1. @Cache (Second-Level Cache Strategies)
+```java
+// READ_ONLY — fastest, safest
+// Use when: data NEVER changes (country codes, enums, config)
+@Cache(usage = CacheConcurrencyStrategy.READ_ONLY)
+
+// READ_WRITE — moderate, consistent
+// Use when: data changes occasionally (user profiles, products)
+@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+// Uses soft locks — during update, cache entry locked
+// Other sessions get fresh DB data while locked
+
+// NONSTRICT_READ_WRITE — faster, slight inconsistency risk
+// Use when: stale data briefly acceptable (analytics, counts)
+@Cache(usage = CacheConcurrencyStrategy.NONSTRICT_READ_WRITE)
+// No locking — tiny window where stale data possible
+
+// TRANSACTIONAL — strongest, slowest
+// Use when: full transactional consistency required
+@Cache(usage = CacheConcurrencyStrategy.TRANSACTIONAL)
+// Requires JTA transaction manager
+```
+
+**READ_WRITE internal flow**
+```text
+Thread1: UPDATE User(1)         L2 Cache            Thread2: findById(1)
+    │                               │                    │
+    │  acquire soft lock            │                    │
+    │──────────────────────────────>│                    │
+    │                               │ 🔒 LOCKED          │
+    │                               │                    │ findById(1)
+    │                               │<───────────────────│
+    │                               │ locked! go to DB   │
+    │                               │───────────────────>│
+    │                               │   DB returns       │
+    │                               │   fresh value      │
+    │                               │<───────────────────│
+    │  commit + update cache        │                    │
+    │──────────────────────────────>│                    │
+    │                               │ 🔓 UNLOCKED        │
+    │                               │ updated value      │
+```
+
+##### 2. @DynamicUpdate
+By default Hibernate includes ALL columns in every `UPDATE` — even ones that didn't change.
+
+**Without @DynamicUpdate — full update every time**
+```java
+// Entity has: id, name, email, address, phone, avatar, lastLogin, createdAt
+
+user.setName("John");   // only name changed
+session.update(user);
+
+// SQL generated:
+UPDATE users SET
+    name = 'John',
+    email = 'old@mail.com',      // ← unchanged, but included
+    address = '123 Street',      // ← unchanged, but included
+    phone = '555-1234',          // ← unchanged, but included
+    avatar = '...',              // ← unchanged, but included
+    last_login = '2024-01-01',   // ← unchanged, but included
+    created_at = '2023-01-01'    // ← unchanged, but included
+WHERE id = 1;
+```
+
+**With @DynamicUpdate — only changed columns**
+```java
+user.setName("John");   // only name changed
+session.update(user);
+
+// SQL generated:
+UPDATE users SET
+    name = 'John'        // ✅ only the changed column
+WHERE id = 1;
+```
+
+**When it really matters**
+```text
+Without @DynamicUpdate:
+───────────────────────
+Table: 50 columns
+Change: 1 column
+SQL: UPDATE with all 50 columns
+Network: sends all 50 values
+DB: rewrites all 50 column values
+Indexes: ALL indexed columns re-evaluated 🔴
+
+With @DynamicUpdate:
+────────────────────
+Table: 50 columns
+Change: 1 column
+SQL: UPDATE with 1 column
+Network: sends 1 value
+DB: rewrites 1 column value
+Indexes: ONLY affected index re-evaluated ✅
+```
+
+**Optimistic locking interaction**
+```java
+@Entity
+@DynamicUpdate
+public class BankAccount {
+
+    @Id
+    private Long id;
+
+    private BigDecimal balance;
+    private String ownerName;
+
+    @Version                    // optimistic lock version column
+    private Long version;
+}
+
+// Only balance changed:
+
+// WITHOUT @DynamicUpdate:
+// UPDATE bank_account SET balance=500, owner_name='Alice', version=2 WHERE id=1 AND version=1;
+
+// WITH @DynamicUpdate:
+// UPDATE bank_account SET balance=500, version=2 WHERE id=1 AND version=1;
+//                                                            ↑ version always included for lock
+```
+
+**Together on an entity**
+```java
+@Entity
+@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)  // cache across sessions
+@DynamicUpdate                                        // only update changed columns
+public class Product {
+
+    @Id
+    private Long id;
+    private String name;
+    private BigDecimal price;
+    private int stock;
+    private String description;   // large text — expensive to send every update
+}
+
+// Flow:
+// 1. findById(1)  → L2 cache hit         🟢 no DB read
+// 2. price change → UPDATE price only    🟢 minimal DB write
+// 3. findById(1)  → L2 updated + hit     🟢 no DB read
+```
+
+**When to use each**
+
+| Annotation | Use When | Avoid When |
+|------------|----------|------------|
+| `@Cache(READ_WRITE)` | Frequently read, rarely updated | High-write entities, financial data |
+| `@Cache(READ_ONLY)` | Static reference data | Any mutable entity |
+| `@DynamicUpdate` | Wide tables, partial updates | Small tables (overhead not worth it) |
+
+> **Cheat Sheet:**
+> **`@Cache`** — share entity data across sessions so DB isn't hit every time
+> **`@DynamicUpdate`** — only send changed columns in UPDATE, not the entire row
 
 ### 2. Explain the JPA Entity Lifecycle
 
@@ -123,6 +284,8 @@ public class EntityLifecycleDemo {
 ### 3. What is the difference between persist() and merge()?
 
 **Answer:**
+**`persist()`** is used to add a new entity instance to the persistence context (making it Managed). It will fail if an entity with the same identity already exists.
+**`merge()`** is used to update an existing entity or attach a detached entity back to the persistence context. It copies the state of the given object onto the persistent object with the same identifier and returns the newly managed instance.
 
 ```java
 @Service
@@ -201,6 +364,8 @@ public class PersistVsMergeDemo {
 ### 4. Explain the difference between FetchType.LAZY and FetchType.EAGER
 
 **Answer:**
+- **`FetchType.EAGER`** means the related entities are fetched immediately along with the parent entity using a JOIN query. It is the default for `@ManyToOne` and `@OneToOne`.
+- **`FetchType.LAZY`** means the related entities are fetched strictly on-demand, only when their getter methods are accessed for the first time. This saves memory and initial load time but can lead to the N+1 query problem. It is the default for `@OneToMany` and `@ManyToMany`.
 
 ```java
 @Entity
@@ -292,6 +457,8 @@ public class FetchTypeDemo {
 ### 5. What is the N+1 query problem and how do you solve it?
 
 **Answer:**
+The N+1 query problem occurs when an application executes 1 query to retrieve a list of parent entities, and then N additional queries to fetch their lazily loaded child entities one by one during iteration. This severely degrades database performance by flooding it with individual queries.
+It is typically solved by using `JOIN FETCH` in JPQL, defining an `@EntityGraph`, or using Hibernate-specific tools like `@BatchSize` or `@Fetch(FetchMode.SUBSELECT)`.
 
 ```java
 // Problem demonstration
@@ -397,6 +564,8 @@ public interface AuthorRepository extends JpaRepository<Author, Long> {
 ### 6. Explain JPA Caching (First-Level and Second-Level Cache)
 
 **Answer:**
+- **First-Level Cache (L1):** Enabled by default and scoped exclusively to the `EntityManager` (Transaction level). It ensures that multiple lookups for the exact same entity within the same session do not hit the database. It cannot be disabled.
+- **Second-Level Cache (L2):** Optional and scoped to the `EntityManagerFactory` (Application level). It shares cached entities across multiple sessions/transactions, vastly reducing overall database load. Requires an external caching provider (e.g., Ehcache, Redis).
 
 ```java
 // First-Level Cache (Session/Persistence Context Cache)
@@ -549,6 +718,11 @@ public class CacheEvictionService {
 ### 7. What are the different types of relationships in JPA?
 
 **Answer:**
+JPA supports four standard relational mappings between database tables/entities:
+1. **One-to-One (`@OneToOne`):** A single entity maps exactly to another single entity.
+2. **One-to-Many (`@OneToMany`):** A single entity acts as a parent to multiple child entities.
+3. **Many-to-One (`@ManyToOne`):** Multiple child entities map to a single parent entity.
+4. **Many-to-Many (`@ManyToMany`):** Multiple entities map to multiple entities, typically resolved in the database via an intermediate junction/join table.
 
 ```java
 // 1. ONE-TO-ONE
@@ -694,6 +868,8 @@ public class RelationshipBestPractices {
 ### 8. Explain Cascade Types in JPA
 
 **Answer:**
+Cascading allows EntityManager operations to automatically propagate from a parent entity down to its associated child entities, drastically simplifying relationship management.
+Common types include `PERSIST` (save parent and children), `MERGE` (update parent and children), `REMOVE` (delete parent and children), and `ALL` (apply all operations). Furthermore, `orphanRemoval = true` is a specific feature used to automatically delete child entities from the database when they are simply removed from the parent's collection.
 
 ```java
 @Entity
