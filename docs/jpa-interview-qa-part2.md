@@ -119,6 +119,7 @@ public class UserService {
 ### 17. Explain query method naming conventions in Spring Data JPA
 
 **Answer:**
+Spring Data JPA uses a built-in query builder mechanism to automatically generate SQL queries based entirely on the method's name. By combining specific prefixes (like `findBy`, `countBy`, `deleteBy`) with entity properties (like `Username`, `Email`) and logical keywords (like `And`, `Or`, `Between`, `LessThan`), you can execute complex queries without writing a single line of JPQL or SQL.
 
 ```java
 public interface UserRepository extends JpaRepository<User, Long> {
@@ -238,6 +239,11 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 ### 18. How do you implement custom repository methods in Spring Data JPA?
 
 **Answer:**
+While Spring Data JPA covers most standard queries automatically, you sometimes need highly customized, complex JDBC/JPA logic. 
+To implement a custom repository method, you follow a 3-step convention:
+1. Create an interface (e.g., `UserRepositoryCustom`) declaring your custom method.
+2. Create an implementation class exactly named with the `Impl` suffix (e.g., `UserRepositoryCustomImpl`) that implements the interface using a standard `EntityManager`.
+3. Have your primary Spring Data Repository interface extend both `JpaRepository` and your newly created custom interface. Spring will automatically weave the implementation together at runtime.
 
 ```java
 // Step 1: Define custom interface
@@ -385,6 +391,8 @@ public class UserSearchService {
 ### 19. Explain @Query annotation and its features
 
 **Answer:**
+The `@Query` annotation allows you to explicitly define raw JPQL or native SQL queries directly above a repository method. 
+It bypasses the method-naming convention, which is incredibly useful for executing highly complex queries with multiple joins, nested subqueries, or bulk update/delete operations (`@Modifying`). It supports both positional parameters (`?1`) and named parameters (`@Param("name")`).
 
 ```java
 public interface UserRepository extends JpaRepository<User, Long> {
@@ -508,6 +516,11 @@ public class QueryExamplesService {
 ### 20. What are Projections in Spring Data JPA?
 
 **Answer:**
+Projections allow you to fetch only a specific subset of columns from the database instead of loading the entire Entity. This massively optimizes memory and network performance for read-heavy operations.
+Spring Data JPA supports:
+- **Interface-based projections:** Define an interface with getter methods matching the desired fields.
+- **Class-based projections (DTOs):** Define a POJO and use JPQL constructor expressions (`SELECT new com.app.MyDTO(...)`) to hydrate it.
+- **Dynamic Projections:** Pass the desired Class/Interface type as a parameter to the repository method.
 
 ```java
 // Interface-based projection
@@ -651,6 +664,8 @@ public class UserStatsRepository {
 ### 21. How do you implement auditing in JPA?
 
 **Answer:**
+JPA Auditing automatically tracks and populates "who" and "when" an entity was created or modified. 
+It is enabled by adding `@EnableJpaAuditing` to a configuration class and assigning `@EntityListeners(AuditingEntityListener.class)` to the entities. It provides four core annotations: `@CreatedDate`, `@LastModifiedDate`, `@CreatedBy`, and `@LastModifiedBy`. For the latter two to work, you must provide an `AuditorAware` bean to extract the current user (e.g., from the Spring Security context).
 
 ```java
 // Enable JPA Auditing
@@ -842,6 +857,8 @@ public class AuditService {
 ### 22. How do you handle soft deletes in JPA?
 
 **Answer:**
+Soft deletes involve marking an entity as deleted (e.g. setting an `isDeleted` flag or `deletedAt` timestamp) without physically removing the data row from the database. This is critical for data retention and auditing.
+Hibernate achieves this seamlessly with two annotations at the Class level: `@SQLDelete` (which intercepts and overwrites any `delete()` operations into an `UPDATE` statement) and `@Where` (which automatically filters out soft-deleted records globally on all subsequent `SELECT` queries).
 
 ```java
 // Approach 1: Using @Where annotation
@@ -1031,6 +1048,8 @@ public class OrderService {
 ### 23. Explain Criteria API and its advantages
 
 **Answer:**
+The Criteria API is a type-safe, entirely programmatic framework for constructing JPQL queries via Java objects rather than raw strings. It operates by building query trees dynamically using `CriteriaBuilder`.
+**Advantages:** It completely eliminates runtime syntax errors, is deeply type-safe (especially when combined with the JPA Metamodel), and excels at dynamically stitching together optional search filters or complex predicates based on user input.
 
 ```java
 @Service
@@ -1296,6 +1315,8 @@ public class CriteriaAPIExamples {
 ### 24. How do you implement pagination and sorting in JPA?
 
 **Answer:**
+Spring Data JPA elegantly abstracts away generic database LIMIT/OFFSET syntax across different vendors through the `Pageable` and `Sort` interfaces.
+You simply pass a `PageRequest` object (dictating the page number, size, and sorting direction) into standard repository methods. Standard queries will return a `Page<T>` wrapper, automatically triggering a secondary backend query exclusively to calculate the total element count for front-end rendering. For raw JPA without Spring Data, you manually call `setFirstResult(offset)` and `setMaxResults(limit)` directly on the `TypedQuery` object.
 
 ```java
 // Spring Data JPA pagination
@@ -1505,6 +1526,13 @@ public class KeysetPaginationService {
 ### 25. What are the best practices for JPA performance optimization?
 
 **Answer:**
+The most critical best practices revolve around minimizing the number of database roundtrips and optimizing payload size:
+- **Avoid N+1 queries** aggressively via `JOIN FETCH` or `@EntityGraph`.
+- **Use Projections** (DTOs) heavily on read-only endpoints to limit the number of columns fetched, preventing bloated entities.
+- **Implement Second-Level Caching** and query caching for lookup/reference data that rarely changes.
+- **Apply Pagination** for lists and avoid loading giant collections into server memory.
+- **Prefer `@DynamicUpdate`** on tables with a high column count to minimize network impact.
+- **Enable Hibernate Batch Processing** for bulk inserts (`spring.jpa.properties.hibernate.jdbc.batch_size`).
 
 ```java
 @Service

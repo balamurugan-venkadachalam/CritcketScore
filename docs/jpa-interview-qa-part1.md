@@ -995,6 +995,7 @@ public class OrphanRemovalDemo {
 ### 9. What is JPQL and how does it differ from SQL?
 
 **Answer:**
+JPQL (Java Persistence Query Language) is an object-oriented query language used to perform operations on persistent entities. Unlike SQL which operates directly on database tables and columns, JPQL operates on JPA Entity classes and their attributes. This abstracts away the underlying database syntax, making JPQL highly portable across different database vendors.
 
 ```java
 @Service
@@ -1140,6 +1141,8 @@ public class JPQLExamples {
 ### 10. Explain the @Transactional annotation and transaction propagation
 
 **Answer:**
+`@Transactional` is used to define the scope of a database transaction, ensuring that a series of operations either completely succeed or completely fail (rollback) together to maintain data integrity.
+**Transaction Propagation** defines how business methods should behave when they are called by another method that already has an existing transaction (e.g. `REQUIRED` joins the existing one, whereas `REQUIRES_NEW` suspends the current one to start a fresh independent transaction).
 
 ```java
 @Service
@@ -1303,6 +1306,8 @@ public class AuditService {
 ### 11. What is the difference between @Id and @EmbeddedId?
 
 **Answer:**
+- **`@Id`** is used to map a single, simple property (like a `Long` or `UUID`) to the primary key column of a database table.
+- **`@EmbeddedId`** is used exclusively for Composite Primary Keys, where the primary key consists of multiple columns. It requires a dedicated `@Embeddable` class that implements `Serializable` and overrides `equals()` and `hashCode()`.
 
 ```java
 // Simple @Id
@@ -1397,6 +1402,7 @@ public class CompositeKeyService {
 ### 12. Explain @MapsId and its use cases
 
 **Answer:**
+`@MapsId` is used in derived identities, allowing a child entity to map its primary key directly from its parent's primary key instead of generating its own. It is most commonly used in exact 1-to-1 relationships (e.g. `UserProfile` sharing the ID of `User`) and many-to-many junction tables that have extra payload columns (like an `Enrollment` table joining `Student` and `Course`).
 
 ```java
 // Parent-child with shared primary key
@@ -1514,6 +1520,7 @@ public class MapsIdService {
 ### 13. What are Entity Graphs and when should you use them?
 
 **Answer:**
+Entity Graphs are a JPA 2.1 feature used to define the exact shape of the data you want to retrieve. They allow you to override default `@ManyToOne` (Eager) or `@OneToMany` (Lazy) fetching strategies dynamically at runtime. They are the preferred, scalable, type-safe alternative to writing custom JPQL `JOIN FETCH` queries to prevent the N+1 query problem.
 
 ```java
 @Entity
@@ -1619,6 +1626,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
 ### 14. How do you handle optimistic and pessimistic locking?
 
 **Answer:**
+- **Optimistic Locking (`@Version`):** Assumes conflicts are rare. It doesn't lock the database row, but rather checks a literal version number upon update. If another transaction modified the row in the meantime, it throws an `OptimisticLockException`.
+- **Pessimistic Locking (`LockModeType`):** Assumes conflicts are common. It uses actual database-level locks (e.g. `SELECT ... FOR UPDATE`) to block other transactions from reading or writing the row until the current transaction finishes.
 
 ```java
 // Optimistic Locking
@@ -1763,6 +1772,8 @@ public class RetryService {
 ### 15. What is the difference between save() and saveAndFlush()?
 
 **Answer:**
+- **`save()`** schedules the entity for insertion/update but defers the actual SQL execution until the transaction commits (or a flush is triggered). This is highly efficient as it allows for Hibernate batching.
+- **`saveAndFlush()`** forcefully synchronizes the persistence context to the database immediately by executing the SQL right away. This is useful when you explicitly need a database trigger to execute, need to catch a `DataIntegrityViolationException` immediately, or need an auto-incremented ID within the exact same method block.
 
 ```java
 @Service

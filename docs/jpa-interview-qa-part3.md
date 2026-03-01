@@ -178,6 +178,7 @@ public class Category extends BaseEntity {
 ### 27. Explain @Embedded and @Embeddable annotations
 
 **Answer:**
+`@Embeddable` is used to designate a Java class whose instances are stored as an intrinsic part of an owning entity rather than having their own separate identity or table. The `@Embedded` annotation is used directly on the entity field to signify the inclusion of that embeddable object. This pattern is excellent for modeling reusable, highly cohesive domain concepts (like an `Address` or `ContactInfo` record) while physically keeping the data flattened inside a single database table for efficiency.
 
 ```java
 // Embeddable class
@@ -321,6 +322,10 @@ public class EmbeddedQueryService {
 ### 28. How do you implement multi-tenancy in JPA?
 
 **Answer:**
+Implementing Multi-Tenancy (where a single application instance serves multiple distinct client organizations) in JPA typically follows one of three strategies:
+1. **Database-per-Tenant:** Achieved via dynamic routing of the `DataSource` using `AbstractRoutingDataSource`.
+2. **Schema-per-Tenant:** Utilizes a `MultiTenantConnectionProvider` to transparently switch schemas whenever a connection is acquired.
+3. **Discriminator Column (Shared Database):** Appends a `tenant_id` column to all tables. A Hibernate `@Filter` is then defined and automatically applied via an AOP Aspect to enforce strict tenant isolation silently on every query.
 
 ```java
 // Strategy 1: Separate Database per Tenant
@@ -549,6 +554,8 @@ public class OrderService {
 ### 29. How do you handle database migrations with JPA?
 
 **Answer:**
+JPA's internal automatic schema generation (e.g. `hibernate.hbm2ddl.auto`) is extremely dangerous and strictly avoided in production environments.
+Instead, professional database migrations are handled using schema-versioning tools like Flyway or Liquibase. These standalone tools track the sequential evolution of the database structure via ordered, raw SQL scripts or XML changelogs. They ensure that schema changes are predictably and safely deployed in tandem with your codebase across all environments without risking accidental table drops.
 
 ```java
 // Flyway configuration
@@ -747,6 +754,8 @@ public class DataMigrationService {
 ### 30. How do you implement custom ID generators in JPA?
 
 **Answer:**
+Standard JPA ID generation strategies (`IDENTITY`, `SEQUENCE`) often don't meet complex business requirements, such as needing to generate a sequential identifier with a specific string prefix (e.g. `USR-0001`).
+You can implement completely custom ID generators by creating a class that implements Hibernate's `IdentifierGenerator` interface, specifically overriding the `generate()` method to construct the custom string. You then wire it to the entity class using the `@GenericGenerator` annotation coupled side-by-side with `@GeneratedValue`.
 
 ```java
 // Custom ID generator
