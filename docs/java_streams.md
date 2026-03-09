@@ -164,6 +164,455 @@ String[] nameArray = names.stream().toArray(String[]::new);
 
 ---
 
+## How `collect()` and `Collector` Work Internally
+
+### The Big Picture
+
+`collect()` is a terminal operation that transforms a Stream into a concrete result (List, Map, String, etc.).
+It delegates all the work to a **Collector** — a recipe object that tells the stream **HOW** to accumulate elements.
+
+```
+stream.collect(someCollector)
+       │           │
+       │           └── The recipe (HOW to collect)
+       └── The trigger (START collecting)
+```
+
+### The Collector Interface — 4 Functions
+
+Every Collector is built from exactly 4 functions. Think of it as a **factory assembly line**:
+
+```java
+public interface Collector<T, A, R> {
+    Supplier<A>          supplier();       // 1. Create empty container
+    BiConsumer<A, T>     accumulator();    // 2. Add one element to container
+    BinaryOperator<A>   combiner();       // 3. Merge two containers (parallel)
+    Function<A, R>      finisher();       // 4. Final transformation
+}
+// T = input element type,  A = accumulation type,  R = result type
+```
+
+### Real-World Analogy: Packing Apples into Boxes
+
+Imagine a fruit-packing factory where apples (stream elements) arrive on a conveyor belt:
+
+```
+ APPLES ON CONVEYOR BELT (Stream elements)
+ ══════════════════════════════════════════
+
+ Step 1: SUPPLIER — "Get an empty box"
+ ┌─────────────┐
+ │             │  ← Factory worker grabs a fresh empty box
+ │  (empty)    │     Supplier<A> → creates new ArrayList / HashMap / StringBuilder
+ └─────────────┘
+
+ Step 2: ACCUMULATOR — "Put each apple into the box, one by one"
+ ┌─────────────┐
+ │ 🍎          │  ← apple 1 arrives → worker puts it in box
+ │ 🍎🍎        │  ← apple 2 arrives → worker puts it in box
+ │ 🍎🍎🍎      │  ← apple 3 arrives → worker puts it in box
+ └─────────────┘     BiConsumer<A,T> → list.add(element)
+
+ Step 3: COMBINER — "Merge boxes from different lanes" (only in parallel)
+ ┌────────┐  ┌────────┐        ┌──────────────────┐
+ │ 🍎🍎   │ +│ 🍎🍎🍎 │  ───►  │ 🍎🍎🍎🍎🍎       │
+ │ Lane 1 │  │ Lane 2 │        │ Merged Box       │
+ └────────┘  └────────┘        └──────────────────┘
+     Worker 1 and Worker 2 merge their boxes into one
+     BinaryOperator<A> → list1.addAll(list2)
+
+ Step 4: FINISHER — "Seal the box and label it"
+ ┌──────────────────┐       ╔══════════════════╗
+ │ 🍎🍎🍎🍎🍎       │  ───► ║  Final Product   ║
+ │ Mutable box      │       ║  (sealed box)    ║
+ └──────────────────┘       ╚══════════════════╝
+     Convert the intermediate container to the final result
+     Function<A,R> → Collections.unmodifiableList(list)
+```
+
+### Each Function Explained with Code
+
+```java
+// Collector.of(supplier, accumulator, combiner, finisher)
+
+Collector<Integer, ?, List<Integer>> myToList = Collector.of(
+
+    // 1. SUPPLIER: creates the empty mutable container
+    //    Called ONCE at the beginning (once per thread in parallel)
+    //    Analogy: "Give me a fresh empty box"
+    () -> new ArrayList<>(),              // ArrayList::new
+
+    // 2. ACCUMULATOR: adds ONE element into the container
+    //    Called ONCE PER ELEMENT in the stream
+    //    Analogy: "Put this apple into the box"
+    (list, element) -> list.add(element), // ArrayList::add
+
+    // 3. COMBINER: merges two containers into one
+    //    Called ONLY in parallel streams to merge partial results
+    //    Analogy: "Pour box B into box A"
+    (list1, list2) -> {
+        list1.addAll(list2);
+        return list1;
+    },
+
+    // 4. FINISHER: transforms the container into the final result
+    //    Called ONCE at the very end
+    //    Analogy: "Seal the box and put a label on it"
+    //    If container IS the result, use Function.identity()
+    list -> Collections.unmodifiableList(list)
+);
+```
+
+### Step-by-Step: `numbers.stream().collect(Collectors.toList())`
+
+```
+ Source: List<Integer> numbers = List.of(1, 2, 3, 4, 5);
+
+ ╔═══════════════════════════════════════════════════════════════════════╗
+ ║                    SEQUENTIAL STREAM FLOW                           ║
+ ╠═══════════════════════════════════════════════════════════════════════╣
+ ║                                                                     ║
+ ║  numbers.stream()                                                   ║
+ ║     │                                                               ║
+ ║     ▼                                                               ║
+ ║  .collect(Collectors.toList())                                      ║
+ ║     │                                                               ║
+ ║     │  ┌──────────────────────────────────────────────────────┐      ║
+ ║     │  │ Step 1: SUPPLIER — supplier.get()                   │      ║
+ ║     │  │                                                     │      ║
+ ║     │  │   ArrayList<Integer> container = new ArrayList<>(); │      ║
+ ║     │  │   container = []                                    │      ║
+ ║     │  └──────────────────────────────────────────────────────┘      ║
+ ║     │                                                               ║
+ ║     │  ┌──────────────────────────────────────────────────────┐      ║
+ ║     │  │ Step 2: ACCUMULATOR — called for EACH element       │      ║
+ ║     │  │                                                     │      ║
+ ║     │  │   accumulator.accept(container, 1) → [1]            │      ║
+ ║     │  │   accumulator.accept(container, 2) → [1, 2]         │      ║
+ ║     │  │   accumulator.accept(container, 3) → [1, 2, 3]      │      ║
+ ║     │  │   accumulator.accept(container, 4) → [1, 2, 3, 4]   │      ║
+ ║     │  │   accumulator.accept(container, 5) → [1, 2, 3, 4, 5]│      ║
+ ║     │  └──────────────────────────────────────────────────────┘      ║
+ ║     │                                                               ║
+ ║     │  ┌──────────────────────────────────────────────────────┐      ║
+ ║     │  │ Step 3: COMBINER — SKIPPED (sequential stream)      │      ║
+ ║     │  │         Only used in .parallelStream()               │      ║
+ ║     │  └──────────────────────────────────────────────────────┘      ║
+ ║     │                                                               ║
+ ║     │  ┌──────────────────────────────────────────────────────┐      ║
+ ║     │  │ Step 4: FINISHER — finisher.apply(container)        │      ║
+ ║     │  │                                                     │      ║
+ ║     │  │   toList() uses IDENTITY finisher                   │      ║
+ ║     │  │   → returns the ArrayList as-is                     │      ║
+ ║     │  │   result = [1, 2, 3, 4, 5]                          │      ║
+ ║     │  └──────────────────────────────────────────────────────┘      ║
+ ║     │                                                               ║
+ ║     ▼                                                               ║
+ ║  List<Integer> result = [1, 2, 3, 4, 5]                            ║
+ ║                                                                     ║
+ ╚═══════════════════════════════════════════════════════════════════════╝
+```
+
+### Parallel Stream Flow (when combiner matters)
+
+```
+ Source: List.of(1, 2, 3, 4, 5, 6).parallelStream().collect(Collectors.toList())
+
+ ╔═══════════════════════════════════════════════════════════════════════╗
+ ║                     PARALLEL STREAM FLOW                            ║
+ ╠═══════════════════════════════════════════════════════════════════════╣
+ ║                                                                     ║
+ ║  Stream is split across threads by the ForkJoinPool:                ║
+ ║                                                                     ║
+ ║  Thread 1                Thread 2               Thread 3            ║
+ ║  ┌──────────┐            ┌──────────┐           ┌──────────┐        ║
+ ║  │SUPPLIER  │            │SUPPLIER  │           │SUPPLIER  │        ║
+ ║  │ []       │            │ []       │           │ []       │        ║
+ ║  ├──────────┤            ├──────────┤           ├──────────┤        ║
+ ║  │ACCUMULATE│            │ACCUMULATE│           │ACCUMULATE│        ║
+ ║  │ +1 → [1] │            │ +3 → [3] │           │ +5 → [5] │        ║
+ ║  │ +2 → [1,2]│           │ +4 → [3,4]│          │ +6 → [5,6]│       ║
+ ║  └────┬─────┘            └────┬─────┘           └────┬─────┘        ║
+ ║       │                       │                      │              ║
+ ║       └──────────┬────────────┘                      │              ║
+ ║                  │ COMBINER                          │              ║
+ ║                  ▼                                   │              ║
+ ║           ┌────────────┐                             │              ║
+ ║           │ [1,2,3,4]  │                             │              ║
+ ║           └─────┬──────┘                             │              ║
+ ║                 │              COMBINER              │              ║
+ ║                 └──────────────┬─────────────────────┘              ║
+ ║                                ▼                                    ║
+ ║                      ┌──────────────────┐                           ║
+ ║                      │ [1, 2, 3, 4, 5, 6]│                          ║
+ ║                      └────────┬─────────┘                           ║
+ ║                               │ FINISHER                            ║
+ ║                               ▼                                     ║
+ ║                     List<Integer> result                            ║
+ ║                     = [1, 2, 3, 4, 5, 6]                            ║
+ ╚═══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## Key Collector Terminology
+
+### `downstream`
+A **downstream collector** is a collector passed as an argument to another collector. It processes elements **after** the outer collector has done its work. Think of it as a **sub-task** or **inner pipeline**.
+
+```
+ groupingBy(Employee::department,  ←── outer collector: splits into groups
+     counting()                    ←── DOWNSTREAM: what to do WITHIN each group
+ )
+```
+
+```java
+// Without downstream → default is toList()
+Map<String, List<Employee>> byDept = employees.stream()
+    .collect(Collectors.groupingBy(Employee::department));
+// Each group → List<Employee>
+
+// With downstream → counting() replaces toList()
+Map<String, Long> countByDept = employees.stream()
+    .collect(Collectors.groupingBy(Employee::department, Collectors.counting()));
+// Each group → Long (count)
+
+// Nesting: downstream of a downstream
+Map<String, Optional<String>> topNameByDept = employees.stream()
+    .collect(Collectors.groupingBy(Employee::department,          // outer
+        Collectors.collectingAndThen(                             // downstream 1
+            Collectors.maxBy(Comparator.comparingDouble(Employee::salary)), // downstream 2
+            opt -> opt.map(Employee::name))));
+```
+
+**Which collectors accept a downstream?**
+`groupingBy`, `partitioningBy`, `mapping`, `flatMapping`, `filtering`, `collectingAndThen`, `teeing`
+
+### `finisher`
+A **finisher** is the final transformation applied to the accumulated result. It converts the mutable intermediate container (type `A`) into the final result (type `R`).
+
+```
+ Accumulated data (A)  ──── finisher ────►  Final result (R)
+ ArrayList<String>     ──── finisher ────►  UnmodifiableList<String>
+ StringBuilder         ──── finisher ────►  String
+```
+
+```java
+// collectingAndThen: the 2nd argument IS the finisher
+List<String> immutable = names.stream()
+    .collect(Collectors.collectingAndThen(
+        Collectors.toList(),                    // downstream collects into ArrayList
+        Collections::unmodifiableList));        // FINISHER: wraps as unmodifiable
+//      ─────────────────────────────
+//      This is the finisher function
+
+// In toList(), finisher is Function.identity() — returns ArrayList as-is
+// In joining(), finisher is StringBuilder::toString — converts builder to String
+```
+
+### `merger` (in `teeing`)
+A **merger** is the function in `teeing()` that combines the results of two independent collectors into one final result. It runs **after** both downstream collectors finish.
+
+```
+ Stream elements
+   │
+   ├──► downstream1 ──► result1 ──┐
+   │                               ├──► MERGER(result1, result2) ──► final result
+   └──► downstream2 ──► result2 ──┘
+```
+
+```java
+// merger combines count and sum into a formatted String
+String report = numbers.stream()
+    .collect(Collectors.teeing(
+        Collectors.counting(),                    // downstream1 → Long
+        Collectors.summingInt(n -> n),            // downstream2 → Integer
+        (count, sum) -> "Count=" + count + ", Sum=" + sum));  // MERGER
+//      ─────────────────────────────────────────────────────
+//      This is the merger — takes (Long, Integer) → returns String
+// "Count=10, Sum=55"
+```
+
+---
+
+## Supplier, Accumulator, Combiner, Finisher — Deep Dive
+
+### Real-World Analogy: Restaurant Salad Bar
+
+Imagine you are collecting salad ingredients from a salad bar conveyor belt:
+
+| Collector Part | Salad Bar Analogy | Java Equivalent |
+|---|---|---|
+| **Supplier** | Grab a fresh empty plate | `() -> new ArrayList<>()` |
+| **Accumulator** | Pick one item and put it on your plate | `(plate, item) -> plate.add(item)` |
+| **Combiner** | Your friend has another plate — dump theirs onto yours | `(plate1, plate2) -> { plate1.addAll(plate2); return plate1; }` |
+| **Finisher** | Cover plate with cling wrap for takeaway | `plate -> Collections.unmodifiableList(plate)` |
+
+### Complete Examples for Each
+
+#### Supplier — Creates the empty mutable container
+Called once (or once per thread in parallel). Must return a **new mutable** container each time.
+
+```java
+// Different suppliers for different result types:
+() -> new ArrayList<>()          // for toList
+() -> new HashSet<>()            // for toSet
+() -> new StringJoiner(", ")     // for joining
+() -> new HashMap<>()            // for toMap
+() -> new int[1]                 // for counting (mutable int holder)
+() -> new long[]{0L, 0L}         // for averaging (sum + count)
+```
+
+#### Accumulator — Adds one element to the container
+Called once per stream element. Receives the container + current element.
+
+```java
+// Different accumulators:
+(list, elem) -> list.add(elem)                 // toList: add to list
+(set, elem) -> set.add(elem)                   // toSet: add to set
+(joiner, str) -> joiner.add(str)               // joining: append string
+(map, emp) -> map.put(emp.name(), emp.salary()) // toMap: put key-value
+(counter, elem) -> counter[0]++                // counting: increment
+```
+
+#### Combiner — Merges two containers (parallel streams only)
+Called when parallel sub-tasks complete. Must merge container B into container A.
+
+```java
+// Different combiners:
+(list1, list2) -> { list1.addAll(list2); return list1; }   // toList
+(set1, set2) -> { set1.addAll(set2); return set1; }        // toSet
+(j1, j2) -> j1.merge(j2)                                   // joining
+(map1, map2) -> { map1.putAll(map2); return map1; }         // toMap
+(c1, c2) -> { c1[0] += c2[0]; return c1; }                 // counting
+```
+
+#### Finisher — Final transformation
+Called once at the end to convert intermediate container → final result.
+
+```java
+// Different finishers:
+Function.identity()                // toList: ArrayList IS the result
+Function.identity()                // toSet: HashSet IS the result
+StringJoiner::toString             // joining: StringJoiner → String
+Collections::unmodifiableList      // toUnmodifiableList: wrap as immutable
+list -> list.isEmpty() ?           // custom: build final value
+    "empty" : String.join(",", list)
+```
+
+### Putting It All Together — Complete Custom Collector Example
+
+```java
+// Goal: Collect employee names into a comma-separated uppercase string
+// Input:  Stream<Employee>
+// Output: "ALICE, BOB, CHARLIE, DIANA, EVE"
+
+Collector<Employee, StringJoiner, String> nameJoiner = Collector.of(
+
+    // SUPPLIER: create a StringJoiner with ", " delimiter
+    () -> new StringJoiner(", "),
+
+    // ACCUMULATOR: extract name, uppercase it, add to joiner
+    (joiner, emp) -> joiner.add(emp.name().toUpperCase()),
+
+    // COMBINER: merge two joiners (for parallel streams)
+    (joiner1, joiner2) -> joiner1.merge(joiner2),
+
+    // FINISHER: convert StringJoiner → String
+    StringJoiner::toString
+);
+
+String result = employees.stream().collect(nameJoiner);
+// "ALICE, BOB, CHARLIE, DIANA, EVE"
+```
+
+### How `Collectors.toList()` Is Implemented (Simplified)
+
+```java
+// This is what happens inside Collectors.toList():
+public static <T> Collector<T, ?, List<T>> toList() {
+    return Collector.of(
+        ArrayList::new,          // supplier:     () -> new ArrayList<>()
+        ArrayList::add,          // accumulator:  (list, elem) -> list.add(elem)
+        (l1, l2) -> {            // combiner:     merge two lists
+            l1.addAll(l2);
+            return l1;
+        },
+        Function.identity()      // finisher:     return list as-is (no transformation)
+    );
+}
+```
+
+### How `Collectors.joining(delimiter)` Is Implemented (Simplified)
+
+```java
+// This is what happens inside Collectors.joining(", "):
+public static Collector<CharSequence, ?, String> joining(CharSequence delimiter) {
+    return Collector.of(
+        () -> new StringJoiner(delimiter),   // supplier:     fresh joiner
+        StringJoiner::add,                   // accumulator:  joiner.add(element)
+        StringJoiner::merge,                 // combiner:     joiner1.merge(joiner2)
+        StringJoiner::toString               // finisher:     joiner → "a, b, c"
+    );
+}
+```
+
+### Execution Sequence Diagram
+
+```
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │          numbers.stream().collect(Collectors.toList())              │
+ └─────────────┬───────────────────────────────────────────────────────┘
+               │
+               ▼
+ ┌─────────────────────────────┐
+ │ Stream calls collector      │
+ │ .supplier().get()           │
+ │                             │     ┌──────────────────────────────┐
+ │ "Create empty container"    │────►│ new ArrayList<>()            │
+ └─────────────┬───────────────┘     │ container = []               │
+               │                     └──────────────────────────────┘
+               ▼
+ ┌─────────────────────────────┐
+ │ Stream iterates elements    │
+ │ For EACH element, calls:    │
+ │ accumulator.accept(         │
+ │     container, element)     │
+ ├─────────────────────────────┤     ┌──────────────────────────────┐
+ │ accept([], 1)               │────►│ [1]                          │
+ │ accept([1], 2)              │────►│ [1, 2]                       │
+ │ accept([1,2], 3)            │────►│ [1, 2, 3]                    │
+ │ accept([1,2,3], 4)          │────►│ [1, 2, 3, 4]                 │
+ │ accept([1,2,3,4], 5)        │────►│ [1, 2, 3, 4, 5]              │
+ └─────────────┬───────────────┘     └──────────────────────────────┘
+               │
+               ▼
+ ┌─────────────────────────────┐
+ │ Stream calls                │
+ │ finisher.apply(container)   │
+ │                             │     ┌──────────────────────────────┐
+ │ toList() uses IDENTITY      │────►│ return [1, 2, 3, 4, 5] as-is│
+ │ (no transformation needed)  │     └──────────────────────────────┘
+ └─────────────┬───────────────┘
+               │
+               ▼
+ ┌─────────────────────────────┐
+ │ Result:                     │
+ │ List<Integer> = [1,2,3,4,5] │
+ └─────────────────────────────┘
+```
+
+### Summary Table
+
+| Part | When Called | How Many Times | Purpose |
+|---|---|---|---|
+| **Supplier** | At the start | Once (once per thread in parallel) | Create empty mutable container |
+| **Accumulator** | For each element | N times (N = element count) | Add one element to container |
+| **Combiner** | After parallel sub-tasks | 0 times (sequential) / multiple (parallel) | Merge two partial containers |
+| **Finisher** | At the very end | Once | Convert container → final result |
+
+---
+
 ## Collectors — Complete Reference
 
 ### 1. `toList()` / `toUnmodifiableList()`
